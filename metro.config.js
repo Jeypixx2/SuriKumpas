@@ -23,8 +23,11 @@ config.resolver.resolveRequest = (context, moduleName, platform) => {
         }
         // Redirect three/examples/jsm/* to actual files
         if (moduleName.startsWith('three/examples/jsm/')) {
-            const relativePath = moduleName.replace('three/', '');
-            return context.resolveRequest(context, path.resolve(rootThree, relativePath + '.js'), platform);
+            let relativePath = moduleName.replace('three/', '');
+            if (!relativePath.endsWith('.js')) {
+                relativePath += '.js';
+            }
+            return context.resolveRequest(context, path.resolve(rootThree, relativePath), platform);
         }
     }
     return originalResolveRequest ? originalResolveRequest(context, moduleName, platform) : context.resolveRequest(context, moduleName, platform);

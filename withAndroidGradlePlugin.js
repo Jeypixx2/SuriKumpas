@@ -3,8 +3,9 @@ const { withAppBuildGradle } = require('@expo/config-plugins');
 module.exports = function withAndroidGradlePlugin(config) {
   return withAppBuildGradle(config, (config) => {
     if (config.modResults.language === 'groovy') {
-      const gradleContents = config.modResults.contents;
+      let gradleContents = config.modResults.contents;
       
+      // 1. Add configurations.all exclude block if not present
       const excludeBlock = `
 configurations.all {
     exclude group: 'com.android.support', module: 'support-compat'
@@ -16,10 +17,39 @@ configurations.all {
 }
 `;
 
-      // Inject the block if it doesn't already exist
       if (!gradleContents.includes("group: 'com.android.support', module: 'support-compat'")) {
-        config.modResults.contents = gradleContents + excludeBlock;
+        gradleContents = gradleContents + excludeBlock;
       }
+
+      // 2. Add packagingOptions inside android block to resolve META-INF conflicts
+      const packagingBlock = `
+    packagingOptions {
+        pickFirst 'META-INF/androidx.appcompat_appcompat.version'
+        pickFirst 'META-INF/*'
+    }
+`;
+
+      // Check if android block exists
+      if (gradleContents.includes('android {')) {
+        if (gradleContents.includes('packagingOptions {')) {
+          gradleContents = gradleContents.replace(
+            /packagingOptions\s*\{/,
+            "packagingOptions {\n        pickFirst 'META-INF/androidx.appcompat_appcompat.version'\n        pickFirst 'META-INF/*'"
+          );
+        } else if (gradleContents.includes('packaging {')) {
+          gradleContents = gradleContents.replace(
+            /packaging\s*\{/,
+            "packaging {\n        pickFirst 'META-INF/androidx.appcompat_appcompat.version'\n        pickFirst 'META-INF/*'"
+          );
+        } else {
+          gradleContents = gradleContents.replace(
+            /android\s*\{/,
+            `android {${packagingBlock}`
+          );
+        }
+      }
+
+      config.modResults.contents = gradleContents;
     }
     return config;
   });

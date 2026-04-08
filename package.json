@@ -11,9 +11,10 @@
     "clean-start": "npm run clean & npm install --legacy-peer-deps & npx expo start --clear"
   },
   "dependencies": {
+    "@dev-amirzubair/react-native-voice": "^1.0.4",
     "@expo/vector-icons": "^15.0.3",
     "@pixiv/three-vrm": "^2.1.2",
-    "@react-native-voice/voice": "^3.2.4",
+    "buffer": "^6.0.3",
     "expo": "~54.0.0",
     "expo-asset": "~12.0.0",
     "expo-build-properties": "^55.0.12",
@@ -41,6 +42,7 @@
   },
   "devDependencies": {
     "@babel/core": "^7.20.0",
+    "@expo/config-plugins": "^55.0.8",
     "@types/react": "~19.1.10",
     "@types/three": "^0.166.0",
     "typescript": "~5.9.2"

@@ -122,6 +122,8 @@ android {
         }
     }
     packagingOptions {
+        pickFirst 'META-INF/androidx.appcompat_appcompat.version'
+        pickFirst 'META-INF/*'
         jniLibs {
             def enableLegacyPackaging = findProperty('expo.useLegacyPackaging') ?: 'false'
             useLegacyPackaging enableLegacyPackaging.toBoolean()

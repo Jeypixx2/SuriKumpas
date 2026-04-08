@@ -1,7 +1,30 @@
+import { Buffer } from 'buffer';
+
+const OriginalBlob = global.Blob;
+global.Blob = function (this: any, parts: any[], options: any) {
+  if (parts && parts.length > 0 && (parts[0] instanceof ArrayBuffer || ArrayBuffer.isView(parts[0]))) {
+    const base64 = Buffer.from(parts[0] as any).toString('base64');
+    const type = (options && options.type) ? options.type : 'image/png';
+    this.dataURI = `data:${type};base64,${base64}`;
+    return this;
+  }
+  return OriginalBlob ? new OriginalBlob(parts, options) : this;
+} as any;
+
+const originalCreateObjectURL = global.URL.createObjectURL;
+global.URL.createObjectURL = function (blob: any) {
+  if (blob && blob.dataURI) {
+    return blob.dataURI;
+  }
+  return originalCreateObjectURL ? originalCreateObjectURL(blob) : '';
+};
+
 import React, { useRef, useEffect, useCallback } from 'react';
 import { StyleSheet, View, ViewStyle } from 'react-native';
 import { GLView, ExpoWebGLRenderingContext } from 'expo-gl';
 import { Asset } from 'expo-asset';
+import * as FileSystem from 'expo-file-system/legacy';
+import { Renderer } from 'expo-three';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { VRM, VRMUtils, VRMLoaderPlugin } from '@pixiv/three-vrm';
@@ -36,10 +59,7 @@ export default function AvatarViewer({
         try {
             glRef.current = gl;
 
-            const renderer = new THREE.WebGLRenderer({
-                context: gl as unknown as WebGLRenderingContext,
-                antialias: true
-            });
+            const renderer = new Renderer({ gl });
             renderer.setSize(gl.drawingBufferWidth, gl.drawingBufferHeight);
             renderer.setClearColor(0x0a0a0a, 1.0);
             renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -102,11 +122,14 @@ export default function AvatarViewer({
                 throw new Error('Could not resolve VRM asset URI');
             }
 
-            const response = await fetch(uri);
-            if (!response.ok) {
-                throw new Error(`Failed to fetch VRM: ${response.status}`);
-            }
-            const arrayBuffer = await response.arrayBuffer();
+            // Read the file from the local device as base64
+            const fileBase64 = await FileSystem.readAsStringAsync(uri, {
+                encoding: 'base64',
+            });
+
+            // Convert base64 to an ArrayBuffer safely avoiding shared pools
+            const buf = Buffer.from(fileBase64, 'base64');
+            const arrayBuffer = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
 
             const vrm = await new Promise<VRM>((resolve, reject) => {
                 const loader = new GLTFLoader();
@@ -131,6 +154,7 @@ export default function AvatarViewer({
             animator.setVRM(vrm);
             animatorRef.current = animator;
 
+            console.log('[Avatar] VRM loaded successfully');
             onVRMLoaded?.();
         } catch (error) {
             console.error('Error loading VRM:', error);

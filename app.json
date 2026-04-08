@@ -55,13 +55,7 @@
           ]
         }
       ],
-      [
-        "@react-native-voice/voice",
-        {
-          "microphonePermission": "SuriKumpas needs microphone access for speech-to-sign translation.",
-          "speechRecognitionPermission": "SuriKumpas uses speech recognition to convert your speech into sign language."
-        }
-      ],
+
       [
         "expo-build-properties",
         {

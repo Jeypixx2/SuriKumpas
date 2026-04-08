@@ -25,6 +25,19 @@ const MEDIAPIPE_SCRIPT = `
         let holistic = null;
         let camera = null;
         let isProcessing = false;
+
+        window.onerror = function(msg, url, line) {
+            if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
+                window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'log', message: 'WebView Error: ' + msg }));
+            }
+            return true;
+        };
+
+        function log(msg) {
+            if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
+                window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'log', message: String(msg) }));
+            }
+        }
         
         function extractKeypoints(results) {
             const keypoints = [];
@@ -113,9 +126,18 @@ const MEDIAPIPE_SCRIPT = `
         }
         
         async function initHolistic() {
-            holistic = new Holistic({locateFile: (file) => {
-                return 'https://cdn.jsdelivr.net/npm/@mediapipe/holistic/' + file;
-            }});
+            try {
+                log('Initializing Holistic...');
+                
+                if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                    log('CRITICAL: getUserMedia is NOT available!');
+                } else {
+                    log('getUserMedia is available.');
+                }
+
+                holistic = new Holistic({locateFile: (file) => {
+                    return 'https://cdn.jsdelivr.net/npm/@mediapipe/holistic/' + file;
+                }});
             
             holistic.setOptions({
                 modelComplexity: 1,
@@ -141,7 +163,10 @@ const MEDIAPIPE_SCRIPT = `
                 height: 480
             });
             
-            camera.start();
+                camera.start().then(() => log('Camera started successfully')).catch(e => log('Camera start failed: ' + e.message));
+            } catch (err) {
+                log('Init Error: ' + err.toString());
+            }
         }
         
         window.addEventListener('DOMContentLoaded', initHolistic);
@@ -171,6 +196,8 @@ const CameraProcessor = forwardRef<CameraProcessorRef, CameraProcessorProps>(
                 if (message.type === 'keypoints') {
                     const keypoints = new Float32Array(message.data);
                     onKeypointsExtracted?.(keypoints);
+                } else if (message.type === 'log') {
+                    console.log('[WebView DOM]', message.message);
                 }
             } catch (error) {
                 console.error('Error parsing WebView message:', error);
@@ -191,9 +218,9 @@ const CameraProcessor = forwardRef<CameraProcessorRef, CameraProcessorProps>(
             <head>
                 <meta name="viewport" content="width=device-width, initial-scale=1.0">
                 <style>
-                    body { margin: 0; overflow: hidden; background: #000; }
+                    body { margin: 0; overflow: hidden; background: #1a1a1a; }
                     #input_video { display: none; }
-                    #output_canvas { width: 100%; height: 100%; }
+                    #output_canvas { width: 100%; height: 100%; border: 2px solid cyan; }
                 </style>
                 ${MEDIAPIPE_SCRIPT}
             </head>
@@ -210,14 +237,15 @@ const CameraProcessor = forwardRef<CameraProcessorRef, CameraProcessorProps>(
                     ref={webViewRef}
                     style={styles.webView}
                     originWhitelist={['*']}
-                    source={{ html: htmlContent }}
+                    source={{ html: htmlContent, baseUrl: 'https://localhost/' }}
                     onMessage={onMessage}
                     javaScriptEnabled={true}
                     domStorageEnabled={true}
                     mediaPlaybackRequiresUserAction={false}
                     allowsInlineMediaPlayback={true}
-                    cameraAccess={true}
-                    microphoneAccess={false}
+                    allowFileAccessFromFileURLs={true}
+                    allowUniversalAccessFromFileURLs={true}
+                    mediaCapturePermissionGrantType="grant"
                 />
             </View>
         );

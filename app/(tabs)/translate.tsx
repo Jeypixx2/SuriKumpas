@@ -3,7 +3,7 @@ import { StyleSheet, View, Text, Dimensions } from 'react-native';
 import { useRouter } from 'expo-router';
 import { MaterialIcons } from '@expo/vector-icons';
 import { TouchableOpacity } from 'react-native';
-import Voice, { SpeechResultsEvent, SpeechErrorEvent } from '@react-native-voice/voice';
+import Voice, { SpeechResultsEvent, SpeechErrorEvent } from '@dev-amirzubair/react-native-voice';
 import AvatarViewer from '../../components/AvatarViewer';
 import MicButton from '../../components/MicButton';
 import { matchSpeechToLabel, FSLLabel } from '../../lib/labels';
@@ -57,7 +57,7 @@ export default function TranslateScreen() {
     }, []);
 
     const onSpeechError = useCallback((e: SpeechErrorEvent) => {
-        console.error('Speech error:', e.error);
+        console.warn('Speech error:', e.error);
         setIsListening(false);
         setErrorMessage('Speech recognition failed. Please try again.');
 
@@ -70,6 +70,12 @@ export default function TranslateScreen() {
     }, []);
 
     const toggleListening = useCallback(async () => {
+        if (!Voice) {
+            console.error("Voice module not linked natively");
+            setErrorMessage("Voice module not linked natively. Rebuild the app using npx expo run:android");
+            return;
+        }
+
         if (isListening) {
             try {
                 await Voice.stop();
