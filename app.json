@@ -1,0 +1,83 @@
+{
+  "expo": {
+    "name": "SuriKumpas",
+    "slug": "surikumpas",
+    "scheme": "surikumpas",
+    "version": "1.0.0",
+    "sdkVersion": "54.0.0",
+    "platforms": [
+      "ios",
+      "android"
+    ],
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0a0a0a"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.surikumpas.app",
+      "infoPlist": {
+        "NSCameraUsageDescription": "SuriKumpas needs camera access to detect Filipino Sign Language gestures.",
+        "NSMicrophoneUsageDescription": "SuriKumpas needs microphone access for speech-to-sign translation.",
+        "NSSpeechRecognitionUsageDescription": "SuriKumpas uses speech recognition to convert your speech into sign language."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0a0a0a"
+      },
+      "package": "com.surikumpas.app",
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.INTERNET"
+      ]
+    },
+    "web": {
+      "bundler": "metro"
+    },
+    "plugins": [
+      [
+        "expo-asset",
+        {
+          "assets": [
+            "./assets/fsl_model.tflite",
+            "./assets/alphabet_model.tflite",
+            "./assets/avatar.vrm"
+          ]
+        }
+      ],
+      [
+        "@react-native-voice/voice",
+        {
+          "microphonePermission": "SuriKumpas needs microphone access for speech-to-sign translation.",
+          "speechRecognitionPermission": "SuriKumpas uses speech recognition to convert your speech into sign language."
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "useAndroidX": true,
+            "enableJetifier": true
+          }
+        }
+      ],
+      "./withAndroidManifestPlugin.js",
+      "./withAndroidGradlePlugin.js"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "f274d92c-8e29-4af2-a858-a6985e102255"
+      }
+    }
+  }
+}
