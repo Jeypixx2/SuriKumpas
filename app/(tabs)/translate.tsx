@@ -58,8 +58,15 @@ export default function TranslateScreen() {
 
     const onSpeechError = useCallback((e: SpeechErrorEvent) => {
         console.warn('Speech error:', e.error);
+        
+        // Error 7 is "No match" - just means silence. Don't complain to user.
+        if (e.error && (e.error as any).code === '7') {
+           setIsListening(false);
+           return;
+        }
+
         setIsListening(false);
-        setErrorMessage('Speech recognition failed. Please try again.');
+        setErrorMessage('Speech recognition timeout. Speak closer to the Mic.');
 
         if (timeoutRef.current) {
             clearTimeout(timeoutRef.current);
@@ -89,7 +96,8 @@ export default function TranslateScreen() {
                 setErrorMessage(null);
                 setSignToPlay(null);
                 setLetterToPlay(null);
-                await Voice.start('en-PH');
+                // ALWAYS enforce en-US on OEM devices to prevent Error 11 language pack rejects
+                await Voice.start('en-US'); 
                 setIsListening(true);
             } catch (error) {
                 console.error('Error starting voice:', error);

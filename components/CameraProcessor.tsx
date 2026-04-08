@@ -1,7 +1,8 @@
 import React, { useRef, useEffect, useState, useCallback, forwardRef, useImperativeHandle } from 'react';
-import { StyleSheet, View, Text, Dimensions } from 'react-native';
+import { StyleSheet, View, Text, Dimensions, ActivityIndicator } from 'react-native';
 import { CameraView, CameraType, useCameraPermissions } from 'expo-camera';
 import { WebView } from 'react-native-webview';
+import * as FileSystem from 'expo-file-system/legacy';
 
 interface CameraProcessorProps {
     onKeypointsExtracted?: (keypoints: Float32Array) => void;
@@ -176,6 +177,7 @@ const MEDIAPIPE_SCRIPT = `
 const CameraProcessor = forwardRef<CameraProcessorRef, CameraProcessorProps>(
     ({ onKeypointsExtracted, style }, ref) => {
         const [permission, requestPermission] = useCameraPermissions();
+        const [htmlUri, setHtmlUri] = useState<string | null>(null);
         const webViewRef = useRef<WebView>(null);
         const cameraRef = useRef<CameraView>(null);
 
@@ -189,6 +191,37 @@ const CameraProcessor = forwardRef<CameraProcessorRef, CameraProcessorProps>(
                 requestPermission();
             }
         }, [permission, requestPermission]);
+
+        useEffect(() => {
+            const prepareHtmlFile = async () => {
+                const htmlContent = `
+                    <!DOCTYPE html>
+                    <html>
+                    <head>
+                        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                        <style>
+                            body { margin: 0; overflow: hidden; background: #1a1a1a; }
+                            #input_video { display: none; }
+                            #output_canvas { width: 100%; height: 100%; border: 2px solid cyan; }
+                        </style>
+                        ${MEDIAPIPE_SCRIPT}
+                    </head>
+                    <body>
+                        <video id="input_video"></video>
+                        <canvas id="output_canvas" width="640" height="480"></canvas>
+                    </body>
+                    </html>
+                `;
+                const filePath = FileSystem.cacheDirectory + 'mediapipe.html';
+                try {
+                    await FileSystem.writeAsStringAsync(filePath, htmlContent);
+                    setHtmlUri('file://' + filePath);
+                } catch (e) {
+                    console.error('Failed to write mediapipe file', e);
+                }
+            };
+            prepareHtmlFile();
+        }, []);
 
         const onMessage = useCallback((event: any) => {
             try {
@@ -212,24 +245,14 @@ const CameraProcessor = forwardRef<CameraProcessorRef, CameraProcessorProps>(
             );
         }
 
-        const htmlContent = `
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                <style>
-                    body { margin: 0; overflow: hidden; background: #1a1a1a; }
-                    #input_video { display: none; }
-                    #output_canvas { width: 100%; height: 100%; border: 2px solid cyan; }
-                </style>
-                ${MEDIAPIPE_SCRIPT}
-            </head>
-            <body>
-                <video id="input_video"></video>
-                <canvas id="output_canvas" width="640" height="480"></canvas>
-            </body>
-            </html>
-        `;
+        if (!htmlUri) {
+            return (
+                <View style={[styles.container, styles.centered, style]}>
+                    <ActivityIndicator size="large" color="#00E5FF" />
+                    <Text style={styles.permissionText}>Securing Camera Bridge...</Text>
+                </View>
+            );
+        }
 
         return (
             <View style={[styles.container, style]}>
@@ -237,7 +260,7 @@ const CameraProcessor = forwardRef<CameraProcessorRef, CameraProcessorProps>(
                     ref={webViewRef}
                     style={styles.webView}
                     originWhitelist={['*']}
-                    source={{ html: htmlContent, baseUrl: 'https://localhost/' }}
+                    source={{ uri: htmlUri }}
                     onMessage={onMessage}
                     javaScriptEnabled={true}
                     domStorageEnabled={true}
