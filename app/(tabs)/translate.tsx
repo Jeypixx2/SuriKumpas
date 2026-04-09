@@ -17,6 +17,7 @@ export default function TranslateScreen() {
     const [signToPlay, setSignToPlay] = useState<string | null>(null);
     const [letterToPlay, setLetterToPlay] = useState<string | null>(null);
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
+    const [isAvatarLoaded, setIsAvatarLoaded] = useState(false);
     const timeoutRef = useRef<NodeJS.Timeout | null>(null);
 
     useEffect(() => {
@@ -24,7 +25,7 @@ export default function TranslateScreen() {
         Voice.onSpeechError = onSpeechError;
 
         return () => {
-            Voice.destroy().then(Voice.removeAllListeners);
+            Voice.destroy().then(() => Voice.removeAllListeners());
             if (timeoutRef.current) {
                 clearTimeout(timeoutRef.current);
             }
@@ -83,6 +84,17 @@ export default function TranslateScreen() {
             return;
         }
 
+        if (!isAvatarLoaded) {
+            setErrorMessage("Please wait for the 3D Avatar to finish loading.");
+            if (timeoutRef.current) {
+                clearTimeout(timeoutRef.current);
+            }
+            timeoutRef.current = setTimeout(() => {
+                setErrorMessage(null);
+            }, 3000);
+            return;
+        }
+
         if (isListening) {
             try {
                 await Voice.stop();
@@ -104,7 +116,7 @@ export default function TranslateScreen() {
                 setErrorMessage('Could not start speech recognition. Check microphone permissions.');
             }
         }
-    }, [isListening]);
+    }, [isListening, isAvatarLoaded]);
 
     return (
         <View style={styles.container}>
@@ -120,9 +132,15 @@ export default function TranslateScreen() {
                     style={styles.avatar}
                     signToPlay={signToPlay}
                     letterToPlay={letterToPlay}
-                    onVRMLoaded={() => {}}
+                    onVRMLoaded={() => setIsAvatarLoaded(true)}
                     onError={(error) => console.error('Avatar error:', error)}
                 />
+
+                {!isAvatarLoaded && (
+                    <View style={styles.loadingOverlay}>
+                        <Text style={styles.loadingText}>Loading 3D Engine...</Text>
+                    </View>
+                )}
 
                 <View style={styles.dotPatternBackground}>
                     {Array.from({ length: 50 }).map((_, i) => (
@@ -202,6 +220,22 @@ const styles = StyleSheet.create({
     },
     avatar: {
         flex: 1,
+    },
+    loadingOverlay: {
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        backgroundColor: 'rgba(10, 10, 10, 0.8)',
+        justifyContent: 'center',
+        alignItems: 'center',
+        zIndex: 5,
+    },
+    loadingText: {
+        color: '#00e5ff',
+        fontSize: 18,
+        fontWeight: 'bold',
     },
     dotPatternBackground: {
         position: 'absolute',

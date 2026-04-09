@@ -35,6 +35,6 @@ config.resolver.resolveRequest = (context, moduleName, platform) => {
 
 // 4. Important: Add asset support and ensure sourceExts includes the defaults plus extras
 config.resolver.sourceExts = [...config.resolver.sourceExts, 'mjs', 'cjs'];
-config.resolver.assetExts = [...config.resolver.assetExts, 'tflite', 'vrm', 'bin', 'json'];
+config.resolver.assetExts = [...config.resolver.assetExts, 'tflite', 'vrm', 'bin', 'json', 'glb', 'gltf'];
 
 module.exports = config;

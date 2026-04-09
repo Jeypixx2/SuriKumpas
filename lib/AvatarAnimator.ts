@@ -35,11 +35,13 @@ export class AvatarAnimator {
     private letterAnimations: Map<string, THREE.AnimationClip> = new Map();
     private idleClip: THREE.AnimationClip | null = null;
 
-    setVRM(vrm: VRM): void {
+    setVRM(vrm: any): void {
         this.vrm = vrm;
-        const rootObject = vrm.humanoid.humanBones.spine?.node?.parent;
+        const rootObject = vrm.scene; // Use the root scene for the mixer
         if (rootObject) {
             this.mixer = new THREE.AnimationMixer(rootObject);
+        } else {
+            console.warn('[AvatarAnimator] VRM scene is undefined.');
         }
         this.generateAllAnimations();
         this.startIdleAnimation();
@@ -49,6 +51,100 @@ export class AvatarAnimator {
         this.generateIdleAnimation();
         this.generateSignAnimations();
         this.generateLetterAnimations();
+    }
+
+    setCustomSignAnimation(signName: string, clip: THREE.AnimationClip): void {
+        clip.name = signName;
+        // Retarget the clip so arbitrary GLB node names (e.g. l_arm_JNT) map to VRM node names natively
+        this.retargetClip(clip);
+        this.signAnimations.set(signName, clip);
+        console.log(`[AvatarAnimator] Custom animation imported for: ${signName}`);
+    }
+
+    private retargetClip(clip: THREE.AnimationClip): void {
+        if (!this.vrm) return;
+
+        // Common mapping from Rokoko/Mixamo/Custom JNT to standard VRM humanBone names
+        const boneMap: Record<string, string> = {
+            'hips_JNT': 'hips',
+            'spine_JNT': 'spine',
+            'spine1_JNT': 'chest',
+            'spine2_JNT': 'upperChest',
+            'neck_JNT': 'neck',
+            'head_JNT': 'head',
+            'l_shoulder_JNT': 'leftShoulder',
+            'l_arm_JNT': 'leftUpperArm',
+            'l_forearm_JNT': 'leftLowerArm',
+            'l_hand_JNT': 'leftHand',
+            'l_handThumb1_JNT': 'leftThumbProximal',
+            'l_handThumb2_JNT': 'leftThumbIntermediate',
+            'l_handThumb3_JNT': 'leftThumbDistal',
+            'l_handIndex1_JNT': 'leftIndexProximal',
+            'l_handIndex2_JNT': 'leftIndexIntermediate',
+            'l_handIndex3_JNT': 'leftIndexDistal',
+            'l_handMiddle1_JNT': 'leftMiddleProximal',
+            'l_handMiddle2_JNT': 'leftMiddleIntermediate',
+            'l_handMiddle3_JNT': 'leftMiddleDistal',
+            'l_handRing1_JNT': 'leftRingProximal',
+            'l_handRing2_JNT': 'leftRingIntermediate',
+            'l_handRing3_JNT': 'leftRingDistal',
+            'l_handPinky1_JNT': 'leftLittleProximal',
+            'l_handPinky2_JNT': 'leftLittleIntermediate',
+            'l_handPinky3_JNT': 'leftLittleDistal',
+            'r_shoulder_JNT': 'rightShoulder',
+            'r_arm_JNT': 'rightUpperArm',
+            'r_forearm_JNT': 'rightLowerArm',
+            'r_hand_JNT': 'rightHand',
+            'r_handThumb1_JNT': 'rightThumbProximal',
+            'r_handThumb2_JNT': 'rightThumbIntermediate',
+            'r_handThumb3_JNT': 'rightThumbDistal',
+            'r_handIndex1_JNT': 'rightIndexProximal',
+            'r_handIndex2_JNT': 'rightIndexIntermediate',
+            'r_handIndex3_JNT': 'rightIndexDistal',
+            'r_handMiddle1_JNT': 'rightMiddleProximal',
+            'r_handMiddle2_JNT': 'rightMiddleIntermediate',
+            'r_handMiddle3_JNT': 'rightMiddleDistal',
+            'r_handRing1_JNT': 'rightRingProximal',
+            'r_handRing2_JNT': 'rightRingIntermediate',
+            'r_handRing3_JNT': 'rightRingDistal',
+            'r_handPinky1_JNT': 'rightLittleProximal',
+            'r_handPinky2_JNT': 'rightLittleIntermediate',
+            'r_handPinky3_JNT': 'rightLittleDistal',
+            'l_upleg_JNT': 'leftUpperLeg',
+            'l_leg_JNT': 'leftLowerLeg',
+            'l_foot_JNT': 'leftFoot',
+            'l_toebase_JNT': 'leftToes',
+            'r_upleg_JNT': 'rightUpperLeg',
+            'r_leg_JNT': 'rightLowerLeg',
+            'r_foot_JNT': 'rightFoot',
+            'r_toebase_JNT': 'rightToes'
+        };
+
+        const tracksToKeep: THREE.KeyframeTrack[] = [];
+
+        clip.tracks.forEach(track => {
+            const trackParts = track.name.split('.');
+            const nodeName = trackParts[0];
+            const propertyName = trackParts[1];
+
+            // 1. Is this node known in our map?
+            const vrmBoneName = boneMap[nodeName];
+            if (vrmBoneName) {
+                // 2. Does the VRM actually have this bone?
+                const humanBone = (this.vrm as any).humanoid.getRawBoneNode(vrmBoneName) || (this.vrm as any).humanoid.humanBones[vrmBoneName]?.node;
+                
+                if (humanBone) {
+                    // Update track name to the actual unique Three.js node name of the VRM bone
+                    track.name = `${humanBone.name}.${propertyName}`;
+                    tracksToKeep.push(track);
+                }
+            } else {
+                // Fallback: If it's already a valid name, keep it
+                tracksToKeep.push(track);
+            }
+        });
+
+        clip.tracks = tracksToKeep;
     }
 
     private generateIdleAnimation(): void {
@@ -70,14 +166,14 @@ export class AvatarAnimator {
         const tracks: THREE.KeyframeTrack[] = [];
         if (spine) {
             tracks.push(new THREE.QuaternionKeyframeTrack(
-                spine.uuid + '.quaternion',
+                spine.name + '.quaternion',
                 times,
                 spineValues
             ));
         }
         if (chest) {
             tracks.push(new THREE.QuaternionKeyframeTrack(
-                chest.uuid + '.quaternion',
+                chest.name + '.quaternion',
                 times,
                 chestValues
             ));
@@ -149,19 +245,19 @@ export class AvatarAnimator {
         const liValues = this.generateFingerKeyframes(seed + 100, fingerTimes.length);
         const lmValues = this.generateFingerKeyframes(seed + 110, fingerTimes.length);
 
-        if (rightUpperArm) tracks.push(new THREE.QuaternionKeyframeTrack(rightUpperArm.uuid + '.quaternion', times, ruaValues));
-        if (rightLowerArm) tracks.push(new THREE.QuaternionKeyframeTrack(rightLowerArm.uuid + '.quaternion', times, rlaValues));
-        if (rightHand) tracks.push(new THREE.QuaternionKeyframeTrack(rightHand.uuid + '.quaternion', times, rhValues));
-        if (leftUpperArm) tracks.push(new THREE.QuaternionKeyframeTrack(leftUpperArm.uuid + '.quaternion', times, luaValues));
-        if (leftLowerArm) tracks.push(new THREE.QuaternionKeyframeTrack(leftLowerArm.uuid + '.quaternion', times, llaValues));
-        if (leftHand) tracks.push(new THREE.QuaternionKeyframeTrack(leftHand.uuid + '.quaternion', times, lhValues));
+        if (rightUpperArm) tracks.push(new THREE.QuaternionKeyframeTrack(rightUpperArm.name + '.quaternion', times, ruaValues));
+        if (rightLowerArm) tracks.push(new THREE.QuaternionKeyframeTrack(rightLowerArm.name + '.quaternion', times, rlaValues));
+        if (rightHand) tracks.push(new THREE.QuaternionKeyframeTrack(rightHand.name + '.quaternion', times, rhValues));
+        if (leftUpperArm) tracks.push(new THREE.QuaternionKeyframeTrack(leftUpperArm.name + '.quaternion', times, luaValues));
+        if (leftLowerArm) tracks.push(new THREE.QuaternionKeyframeTrack(leftLowerArm.name + '.quaternion', times, llaValues));
+        if (leftHand) tracks.push(new THREE.QuaternionKeyframeTrack(leftHand.name + '.quaternion', times, lhValues));
 
-        if (rightThumb) tracks.push(new THREE.QuaternionKeyframeTrack(rightThumb.uuid + '.quaternion', fingerTimes, rtValues));
-        if (rightIndex) tracks.push(new THREE.QuaternionKeyframeTrack(rightIndex.uuid + '.quaternion', fingerTimes, riValues));
-        if (rightMiddle) tracks.push(new THREE.QuaternionKeyframeTrack(rightMiddle.uuid + '.quaternion', fingerTimes, rmValues));
-        if (leftThumb) tracks.push(new THREE.QuaternionKeyframeTrack(leftThumb.uuid + '.quaternion', fingerTimes, ltValues));
-        if (leftIndex) tracks.push(new THREE.QuaternionKeyframeTrack(leftIndex.uuid + '.quaternion', fingerTimes, liValues));
-        if (leftMiddle) tracks.push(new THREE.QuaternionKeyframeTrack(leftMiddle.uuid + '.quaternion', fingerTimes, lmValues));
+        if (rightThumb) tracks.push(new THREE.QuaternionKeyframeTrack(rightThumb.name + '.quaternion', fingerTimes, rtValues));
+        if (rightIndex) tracks.push(new THREE.QuaternionKeyframeTrack(rightIndex.name + '.quaternion', fingerTimes, riValues));
+        if (rightMiddle) tracks.push(new THREE.QuaternionKeyframeTrack(rightMiddle.name + '.quaternion', fingerTimes, rmValues));
+        if (leftThumb) tracks.push(new THREE.QuaternionKeyframeTrack(leftThumb.name + '.quaternion', fingerTimes, ltValues));
+        if (leftIndex) tracks.push(new THREE.QuaternionKeyframeTrack(leftIndex.name + '.quaternion', fingerTimes, liValues));
+        if (leftMiddle) tracks.push(new THREE.QuaternionKeyframeTrack(leftMiddle.name + '.quaternion', fingerTimes, lmValues));
 
         return new THREE.AnimationClip(signName, duration, tracks);
     }
@@ -188,35 +284,35 @@ export class AvatarAnimator {
             const rlaValues = this.generateArmKeyframes(seed + 5, 5, times.length);
             const rhValues = this.generateHandKeyframes(seed + 10, times.length);
 
-            if (rightUpperArm) tracks.push(new THREE.QuaternionKeyframeTrack(rightUpperArm.uuid + '.quaternion', times, ruaValues));
-            if (rightLowerArm) tracks.push(new THREE.QuaternionKeyframeTrack(rightLowerArm.uuid + '.quaternion', times, rlaValues));
-            if (rightHand) tracks.push(new THREE.QuaternionKeyframeTrack(rightHand.uuid + '.quaternion', times, rhValues));
+            if (rightUpperArm) tracks.push(new THREE.QuaternionKeyframeTrack(rightUpperArm.name + '.quaternion', times, ruaValues));
+            if (rightLowerArm) tracks.push(new THREE.QuaternionKeyframeTrack(rightLowerArm.name + '.quaternion', times, rlaValues));
+            if (rightHand) tracks.push(new THREE.QuaternionKeyframeTrack(rightHand.name + '.quaternion', times, rhValues));
 
             const fingerTimes = [0, duration * 0.3, duration * 0.7, duration];
             const rtValues = this.generateFingerKeyframes(seed + 15, fingerTimes.length, true);
             const riValues = this.generateFingerKeyframes(seed + 25, fingerTimes.length, true);
             const rmValues = this.generateFingerKeyframes(seed + 35, fingerTimes.length, true);
 
-            if (rightThumb) tracks.push(new THREE.QuaternionKeyframeTrack(rightThumb.uuid + '.quaternion', fingerTimes, rtValues));
-            if (rightIndex) tracks.push(new THREE.QuaternionKeyframeTrack(rightIndex.uuid + '.quaternion', fingerTimes, riValues));
-            if (rightMiddle) tracks.push(new THREE.QuaternionKeyframeTrack(rightMiddle.uuid + '.quaternion', fingerTimes, rmValues));
+            if (rightThumb) tracks.push(new THREE.QuaternionKeyframeTrack(rightThumb.name + '.quaternion', fingerTimes, rtValues));
+            if (rightIndex) tracks.push(new THREE.QuaternionKeyframeTrack(rightIndex.name + '.quaternion', fingerTimes, riValues));
+            if (rightMiddle) tracks.push(new THREE.QuaternionKeyframeTrack(rightMiddle.name + '.quaternion', fingerTimes, rmValues));
         } else {
             const luaValues = this.generateArmKeyframes(seed, 6, times.length);
             const llaValues = this.generateArmKeyframes(seed + 5, 7, times.length);
             const lhValues = this.generateHandKeyframes(seed + 10, times.length);
 
-            if (leftUpperArm) tracks.push(new THREE.QuaternionKeyframeTrack(leftUpperArm.uuid + '.quaternion', times, luaValues));
-            if (leftLowerArm) tracks.push(new THREE.QuaternionKeyframeTrack(leftLowerArm.uuid + '.quaternion', times, llaValues));
-            if (leftHand) tracks.push(new THREE.QuaternionKeyframeTrack(leftHand.uuid + '.quaternion', times, lhValues));
+            if (leftUpperArm) tracks.push(new THREE.QuaternionKeyframeTrack(leftUpperArm.name + '.quaternion', times, luaValues));
+            if (leftLowerArm) tracks.push(new THREE.QuaternionKeyframeTrack(leftLowerArm.name + '.quaternion', times, llaValues));
+            if (leftHand) tracks.push(new THREE.QuaternionKeyframeTrack(leftHand.name + '.quaternion', times, lhValues));
 
             const fingerTimes = [0, duration * 0.3, duration * 0.7, duration];
             const ltValues = this.generateFingerKeyframes(seed + 15, fingerTimes.length, true);
             const liValues = this.generateFingerKeyframes(seed + 25, fingerTimes.length, true);
             const lmValues = this.generateFingerKeyframes(seed + 35, fingerTimes.length, true);
 
-            if (leftThumb) tracks.push(new THREE.QuaternionKeyframeTrack(leftThumb.uuid + '.quaternion', fingerTimes, ltValues));
-            if (leftIndex) tracks.push(new THREE.QuaternionKeyframeTrack(leftIndex.uuid + '.quaternion', fingerTimes, liValues));
-            if (leftMiddle) tracks.push(new THREE.QuaternionKeyframeTrack(leftMiddle.uuid + '.quaternion', fingerTimes, lmValues));
+            if (leftThumb) tracks.push(new THREE.QuaternionKeyframeTrack(leftThumb.name + '.quaternion', fingerTimes, ltValues));
+            if (leftIndex) tracks.push(new THREE.QuaternionKeyframeTrack(leftIndex.name + '.quaternion', fingerTimes, liValues));
+            if (leftMiddle) tracks.push(new THREE.QuaternionKeyframeTrack(leftMiddle.name + '.quaternion', fingerTimes, lmValues));
         }
 
         return new THREE.AnimationClip(letter, duration, tracks);
@@ -315,7 +411,15 @@ export class AvatarAnimator {
     }
 
     playSignAnimation(signName: string): void {
-        if (!this.mixer || this.isPlayingSign) return;
+        console.log(`[AvatarAnimator] Request to play sign: ${signName}`);
+        if (!this.mixer) {
+            console.warn('[AvatarAnimator] Mixer not initialized');
+            return;
+        }
+        if (this.isPlayingSign) {
+            console.warn('[AvatarAnimator] Already playing a sign, ignoring request.');
+            return;
+        }
 
         const clip = this.signAnimations.get(signName);
         if (!clip) {
@@ -339,7 +443,15 @@ export class AvatarAnimator {
     }
 
     playLetterAnimation(letter: string): void {
-        if (!this.mixer || this.isPlayingSign) return;
+        console.log(`[AvatarAnimator] Request to play letter: ${letter}`);
+        if (!this.mixer) {
+            console.warn('[AvatarAnimator] Mixer not initialized');
+            return;
+        }
+        if (this.isPlayingSign) {
+            console.warn('[AvatarAnimator] Already playing a sign, ignoring request.');
+            return;
+        }
 
         const clip = this.letterAnimations.get(letter.toUpperCase());
         if (!clip) {
@@ -363,6 +475,7 @@ export class AvatarAnimator {
     }
 
     stopSignAnimation(): void {
+        console.log('[AvatarAnimator] Stopping current animation');
         if (this.currentSignAction) {
             this.currentSignAction.stop();
             this.currentSignAction = null;
