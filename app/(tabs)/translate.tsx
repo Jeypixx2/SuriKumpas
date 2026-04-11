@@ -20,15 +20,23 @@ export default function TranslateScreen() {
     const [isAvatarLoaded, setIsAvatarLoaded] = useState(false);
     const timeoutRef = useRef<NodeJS.Timeout | null>(null);
 
+    const [shouldRenderAvatar, setShouldRenderAvatar] = useState(false);
+
     useEffect(() => {
+        // Start speech listeners
         Voice.onSpeechResults = onSpeechResults;
         Voice.onSpeechError = onSpeechError;
 
+        // Defer rendering the extremely heavy 3D Avatar by 1.5 seconds so that 
+        // the App Startup Splash Screen doesn't freeze and loads instantly!
+        const initTimer = setTimeout(() => {
+            setShouldRenderAvatar(true);
+        }, 1500);
+
         return () => {
             Voice.destroy().then(() => Voice.removeAllListeners());
-            if (timeoutRef.current) {
-                clearTimeout(timeoutRef.current);
-            }
+            if (timeoutRef.current) clearTimeout(timeoutRef.current);
+            clearTimeout(initTimer);
         };
     }, []);
 

@@ -77,8 +77,8 @@ export class AvatarAnimator {
             'l_forearm_JNT': 'leftLowerArm',
             'l_hand_JNT': 'leftHand',
             'l_handThumb1_JNT': 'leftThumbProximal',
-            'l_handThumb2_JNT': 'leftThumbIntermediate',
-            'l_handThumb3_JNT': 'leftThumbDistal',
+            'l_handThumb2_JNT': 'leftThumbDistal',
+            'l_handThumb3_JNT': '', // Ignore tip joint to prevent twisting
             'l_handIndex1_JNT': 'leftIndexProximal',
             'l_handIndex2_JNT': 'leftIndexIntermediate',
             'l_handIndex3_JNT': 'leftIndexDistal',
@@ -96,8 +96,8 @@ export class AvatarAnimator {
             'r_forearm_JNT': 'rightLowerArm',
             'r_hand_JNT': 'rightHand',
             'r_handThumb1_JNT': 'rightThumbProximal',
-            'r_handThumb2_JNT': 'rightThumbIntermediate',
-            'r_handThumb3_JNT': 'rightThumbDistal',
+            'r_handThumb2_JNT': 'rightThumbDistal',
+            'r_handThumb3_JNT': '', // Ignore tip joint to prevent twisting
             'r_handIndex1_JNT': 'rightIndexProximal',
             'r_handIndex2_JNT': 'rightIndexIntermediate',
             'r_handIndex3_JNT': 'rightIndexDistal',
@@ -137,6 +137,9 @@ export class AvatarAnimator {
                     // Update track name to the actual unique Three.js node name of the VRM bone
                     track.name = `${humanBone.name}.${propertyName}`;
                     tracksToKeep.push(track);
+                    if (nodeName.toLowerCase().includes('thumb')) {
+                        console.log(`[AvatarAnimator] Retargeted thumb: ${nodeName} -> ${humanBone.name}`);
+                    }
                 }
             } else {
                 // Fallback: If it's already a valid name, keep it

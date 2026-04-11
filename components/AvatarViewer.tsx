@@ -2,43 +2,35 @@ import { Buffer } from 'buffer';
 
 const OriginalBlob = global.Blob;
 global.Blob = function (this: any, parts: any[], options: any) {
-  console.log('[Avatar] Blob requested with parts:', parts?.length, 'options:', options);
-  if (parts && parts.length > 0 && (parts[0] instanceof ArrayBuffer || ArrayBuffer.isView(parts[0]))) {
-    const type = (options && options.type) ? options.type : 'image/png';
-    console.log('[Avatar] Blob is binary type:', type);
-    
-    // Massive base64 conversions silently crash React Native via Out of Memory.
-    // If it's an image, bypass decoding and immediately return a 1x1 dummy DataURI!
-    if (type.startsWith('image/')) {
-        console.log('[Avatar] Bypassing texture decode to prevent OOM crash!');
-        this.dataURI = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACklEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg==';
+    console.log('[Avatar] Blob requested with parts:', parts?.length, 'options:', options);
+    if (parts && parts.length > 0 && (parts[0] instanceof ArrayBuffer || ArrayBuffer.isView(parts[0]))) {
+        const type = (options && options.type) ? options.type : 'image/png';
+        console.log('[Avatar] Blob is binary type:', type);
+
+        console.log('[Avatar] Blob converting buffer to base64...');
+        const base64 = Buffer.from(parts[0] as any).toString('base64');
+        this.dataURI = `data:${type};base64,${base64}`;
+        console.log('[Avatar] Blob conversion done. Length:', base64.length);
         return this;
     }
-
-    console.log('[Avatar] Blob converting buffer to base64...');
-    const base64 = Buffer.from(parts[0] as any).toString('base64');
-    this.dataURI = `data:${type};base64,${base64}`;
-    console.log('[Avatar] Blob conversion done. Length:', base64.length);
-    return this;
-  }
-  return OriginalBlob ? new OriginalBlob(parts, options) : this;
+    return OriginalBlob ? new OriginalBlob(parts, options) : this;
 } as any;
 
 const originalCreateObjectURL = global.URL.createObjectURL;
 global.URL.createObjectURL = function (blob: any) {
-  if (blob && blob.dataURI) {
-    // console.log('[Avatar] createObjectURL returning dataURI...');
-    return blob.dataURI;
-  }
-  return originalCreateObjectURL ? originalCreateObjectURL(blob) : '';
+    if (blob && blob.dataURI) {
+        // console.log('[Avatar] createObjectURL returning dataURI...');
+        return blob.dataURI;
+    }
+    return originalCreateObjectURL ? originalCreateObjectURL(blob) : '';
 };
 
 // Polyfill ImageLoader to avoid hanging when Three.js tries to use document.createElementNS('img')
 // We will modify THREE.ImageLoader after it is imported below.
-const originalImageLoaderLoad = function (url: string, onLoad: any, onProgress: any, onError: any) {};
+const originalImageLoaderLoad = function (url: string, onLoad: any, onProgress: any, onError: any) { };
 
 import React, { useRef, useEffect, useCallback } from 'react';
-import { StyleSheet, View, ViewStyle } from 'react-native';
+import { StyleSheet, View, ViewStyle, Image } from 'react-native';
 import { GLView, ExpoWebGLRenderingContext } from 'expo-gl';
 import { Asset } from 'expo-asset';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -55,25 +47,53 @@ import { AvatarAnimator } from '../lib/AvatarAnimator';
         const origLoad = loaderClass.prototype.load;
         loaderClass.prototype.load = function (url: string, onLoad?: any, onProgress?: any, onError?: any) {
             console.log(`[Avatar] ${loaderName}.load intercepted! URL length:`, url ? url.length : 0);
-            
-            // If it's an image load, we intercept it with our fake data
+
+            // If it's an image load, we intercept it to save dataURIs to physical files
             if (loaderName === 'ImageLoader' || loaderName === 'ImageBitmapLoader' || loaderName === 'TextureLoader') {
                 const isTexture = loaderName === 'TextureLoader';
-                const imageHack = { localUri: url }; // expo-gl understands { localUri }
-                
-                const result = isTexture ? new THREE.Texture() : imageHack;
-                if (isTexture) {
-                    (result as THREE.Texture).image = imageHack;
-                    (result as THREE.Texture).needsUpdate = true;
-                }
+                const result = isTexture ? new THREE.Texture() : {};
 
-                setTimeout(() => {
-                    console.log(`[Avatar] ${loaderName} simulating onLoad callback...`);
-                    if (onLoad) onLoad(result);
-                }, 10);
-                return result as any;
+                const processImage = async () => {
+                    let finalUrl = url;
+                    // React Native's bridge drops massive data: URIs causing textures to be black. 
+                    // Write the base64 to a physical temp file and load it from disk!
+                    if (url && url.startsWith('data:image/')) {
+                        const extension = url.includes('image/jpeg') ? '.jpg' : '.png';
+                        const filePath = FileSystem.cacheDirectory + 'tex_' + Math.random().toString(36).substring(2) + extension;
+                        const base64Data = url.substring(url.indexOf(',') + 1);
+                        await FileSystem.writeAsStringAsync(filePath, base64Data, { encoding: 'base64' });
+                        finalUrl = filePath;
+                        console.log('[Avatar] Texture saved to disk:', filePath);
+                    }
+
+                    // Native Three.js WILL FAIL to upload the texture if width and height are undefined!
+                    const size = await new Promise<{ width: number, height: number }>((resolve) => {
+                        Image.getSize(finalUrl,
+                            (width, height) => resolve({ width, height }),
+                            () => resolve({ width: 1024, height: 1024 }) // Fallback to 1024x1024 if size extraction fails
+                        );
+                    });
+
+                    const imageHack = { uri: finalUrl, localUri: finalUrl, width: size.width, height: size.height };
+                    if (isTexture) {
+                        (result as THREE.Texture).image = imageHack;
+                        (result as THREE.Texture).needsUpdate = true;
+                    } else {
+                        Object.assign(result, imageHack);
+                    }
+
+                    console.log(`[Avatar] ${loaderName} loaded texture sizes: ${size.width}x${size.height}`);
+                    if (onLoad) onLoad(isTexture ? result : imageHack);
+                };
+
+                processImage().catch(err => {
+                    console.error('[Avatar] Texture processing failed', err);
+                    if (onError) onError(err);
+                });
+
+                return (isTexture ? result : { uri: url, localUri: url }) as any;
             }
-            
+
             // Otherwise, let the original loader handle it
             return origLoad.call(this, url, onLoad, onProgress, onError);
         };
@@ -109,10 +129,10 @@ export default function AvatarViewer({
         console.log('[Avatar] onContextCreate FIRED! GL context acquired.');
         try {
             glRef.current = gl;
-            
+
             // Prevent native EXGL log spam by intercepting unsupported pixelStorei parameters
             const originalPixelStorei = gl.pixelStorei.bind(gl);
-            gl.pixelStorei = function(pname: number, param: any) {
+            gl.pixelStorei = function (pname: number, param: any) {
                 // Ignore UNPACK_FLIP_Y_WEBGL (37440), UNPACK_PREMULTIPLY_ALPHA_WEBGL (37441), UNPACK_COLORSPACE_CONVERSION_WEBGL (37443)
                 if (pname === 37440 || pname === 37441 || pname === 37443 || pname === 3317) {
                     return;
@@ -122,7 +142,7 @@ export default function AvatarViewer({
 
             // Prevent native Expo GL engine memory corruption crash caused by undefined uniform names
             const originalGetActiveUniform = gl.getActiveUniform.bind(gl);
-            gl.getActiveUniform = function(program: WebGLProgram, index: number) {
+            gl.getActiveUniform = function (program: WebGLProgram, index: number) {
                 const info = originalGetActiveUniform(program, index);
                 if (info && info.name === undefined) {
                     // Return a new object because WebGLActiveInfo properties are read-only
@@ -192,7 +212,6 @@ export default function AvatarViewer({
         console.log('[Avatar] Starting loadVRM...');
         try {
             console.log('[Avatar] Requiring asset...');
-            // Correctly resolve the local URI for the avatar.vrm model
             const asset = await Asset.fromModule(require('../assets/avatar.vrm')).downloadAsync();
             console.log('[Avatar] Asset downloaded successfully.');
             const uri = asset.localUri || asset.uri;
@@ -202,20 +221,18 @@ export default function AvatarViewer({
             }
 
             console.log('[Avatar] Reading FileSystem...');
-            // Read the file from the local device as base64
             const fileBase64 = await FileSystem.readAsStringAsync(uri, {
                 encoding: 'base64',
             });
             console.log('[Avatar] FileSystem read complete, string length:', fileBase64.length);
 
-            // Convert base64 to an ArrayBuffer safely avoiding shared pools
             const buf = Buffer.from(fileBase64, 'base64');
             const arrayBuffer = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
 
             const vrm = await new Promise<VRM>((resolve, reject) => {
                 const loader = new GLTFLoader();
                 loader.register((parser: any) => new VRMLoaderPlugin(parser));
-                
+
                 console.log('[Avatar] Calling GLTFLoader.parse...');
                 loader.parse(
                     arrayBuffer,
@@ -238,11 +255,38 @@ export default function AvatarViewer({
 
             const animator = new AvatarAnimator();
             animator.setVRM(vrm);
+            animatorRef.current = animator;
 
-            // Import Custom GLB Animation
+            // 🚀 Avatar is visible NOW — notify the UI immediately!
+            console.log('[Avatar] VRM loaded. Notifying UI...');
+            onVRMLoaded?.();
+
+            // Play any outstanding animation requests
+            if (signToPlay) animator.playSignAnimation(signToPlay);
+            else if (letterToPlay) animator.playLetterAnimation(letterToPlay);
+
+            // ⬇️ Load GLB animations quietly in the background AFTER avatar is shown
+            loadCustomAnimations(animator);
+
+        } catch (error) {
+            console.error('Error loading VRM:', error);
+            onError?.(error instanceof Error ? error : new Error(String(error)));
+        }
+    };
+
+    const loadCustomAnimations = async (animator: AvatarAnimator) => {
+        const customAnimations = [
+            { keyword: 'GOOD MORNING', file: require('../assets/good_morning.glb') },
+            { keyword: 'GOOD EVENING', file: require('../assets/good_evening.glb') },
+            { keyword: 'GOOD NIGHT', file: require('../assets/good_night.glb') },
+            // Add more animations here!
+        ];
+
+        console.log(`[Avatar] Background-loading ${customAnimations.length} GLB animations...`);
+
+        for (const anim of customAnimations) {
             try {
-                console.log('[Avatar] Loading custom GLB animation...');
-                const glbAsset = await Asset.fromModule(require('../assets/good_morning.glb')).downloadAsync();
+                const glbAsset = await Asset.fromModule(anim.file).downloadAsync();
                 const glbUri = glbAsset.localUri || glbAsset.uri;
                 if (glbUri) {
                     const glbBase64 = await FileSystem.readAsStringAsync(glbUri, { encoding: 'base64' });
@@ -251,35 +295,20 @@ export default function AvatarViewer({
 
                     const extGLTF: any = await new Promise((resolve, reject) => {
                         const loader = new GLTFLoader();
-                        // Optional: Bypass textures again for GLB to prevent OOM
                         loader.parse(glbArrayBuffer, '', (gltf: any) => resolve(gltf), (err: any) => reject(err));
                     });
 
                     if (extGLTF.animations && extGLTF.animations.length > 0) {
                         const clip = extGLTF.animations[0];
-                        console.log(`[Avatar] Extracted GLB Clip: ${clip.name}. Tracks: ${clip.tracks.length}`);
-                        animator.setCustomSignAnimation('GOOD MORNING', clip);
+                        console.log(`[Avatar] BG loaded: [${anim.keyword}] Tracks: ${clip.tracks.length}`);
+                        animator.setCustomSignAnimation(anim.keyword, clip);
                     }
                 }
             } catch (err) {
-                console.warn('[Avatar] Failed to load custom GLB:', err);
+                console.warn(`[Avatar] BG load failed for ${anim.keyword}:`, err);
             }
-
-            animatorRef.current = animator;
-
-            console.log('[Avatar] VRM loaded successfully. Animator initialized.');
-            onVRMLoaded?.();
-
-            // Play any outstanding animation requests that arrived before loading finished
-            if (signToPlay) {
-                animator.playSignAnimation(signToPlay);
-            } else if (letterToPlay) {
-                animator.playLetterAnimation(letterToPlay);
-            }
-        } catch (error) {
-            console.error('Error loading VRM:', error);
-            onError?.(error instanceof Error ? error : new Error(String(error)));
         }
+        console.log('[Avatar] All background GLB animations loaded!');
     };
 
     useEffect(() => {

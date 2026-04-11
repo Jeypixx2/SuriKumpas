@@ -111,6 +111,7 @@ export const FSL_LABELS: FSLLabel[] = [
     { id: 102, english: "WINE",               filipino: "ALAK",                 category: "DRINK" },
     { id: 103, english: "SUGAR",              filipino: "ASUKAL",               category: "DRINK" },
     { id: 104, english: "NO SUGAR",           filipino: "WALANG ASUKAL",        category: "DRINK" },
+    { id: 105, english: "GOOD NIGHT",         filipino: "MAGANDANG GABI POH",   category: "GREETING" },
 ];
 
 export function getLabelById(id: number): FSLLabel {
