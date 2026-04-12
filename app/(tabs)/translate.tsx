@@ -6,7 +6,7 @@ import { TouchableOpacity } from 'react-native';
 import Voice, { SpeechResultsEvent, SpeechErrorEvent } from '@dev-amirzubair/react-native-voice';
 import AvatarViewer from '../../components/AvatarViewer';
 import MicButton from '../../components/MicButton';
-import { matchSpeechToLabel, FSLLabel } from '../../lib/labels';
+import { matchSpeechToLabel, FSLLabel, SequenceItem, tokenizeSentence } from '../../lib/labels';
 
 const { width, height } = Dimensions.get('window');
 
@@ -16,6 +16,7 @@ export default function TranslateScreen() {
     const [recognizedText, setRecognizedText] = useState('');
     const [signToPlay, setSignToPlay] = useState<string | null>(null);
     const [letterToPlay, setLetterToPlay] = useState<string | null>(null);
+    const [sequenceToPlay, setSequenceToPlay] = useState<SequenceItem[] | null>(null);
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
     const [isAvatarLoaded, setIsAvatarLoaded] = useState(false);
     const timeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -45,14 +46,16 @@ export default function TranslateScreen() {
         setRecognizedText(text);
         setIsListening(false);
 
-        const matchedLabel = matchSpeechToLabel(text);
+        const sequence = tokenizeSentence(text);
 
-        if (matchedLabel) {
-            setSignToPlay(matchedLabel.english);
+        if (sequence.length > 0) {
+            setSequenceToPlay(sequence);
+            setSignToPlay(null);
             setLetterToPlay(null);
             setErrorMessage(null);
         } else {
             setErrorMessage('Sign not available');
+            setSequenceToPlay(null);
             setSignToPlay(null);
             setLetterToPlay(null);
 
@@ -114,6 +117,7 @@ export default function TranslateScreen() {
             try {
                 setRecognizedText('');
                 setErrorMessage(null);
+                setSequenceToPlay(null);
                 setSignToPlay(null);
                 setLetterToPlay(null);
                 // ALWAYS enforce en-US on OEM devices to prevent Error 11 language pack rejects
@@ -140,6 +144,7 @@ export default function TranslateScreen() {
                     style={styles.avatar}
                     signToPlay={signToPlay}
                     letterToPlay={letterToPlay}
+                    sequenceToPlay={sequenceToPlay}
                     onVRMLoaded={() => setIsAvatarLoaded(true)}
                     onError={(error) => console.error('Avatar error:', error)}
                 />
@@ -176,6 +181,22 @@ export default function TranslateScreen() {
                 {errorMessage ? (
                     <Text style={styles.errorText}>{errorMessage}</Text>
                 ) : null}
+
+
+                {sequenceToPlay && sequenceToPlay.length > 0 && (
+                    <View style={styles.sequenceContainer}>
+                        {sequenceToPlay.slice(0, 5).map((item, index) => (
+                            <View key={index} style={styles.sequenceBadge}>
+                                <Text style={styles.sequenceText}>
+                                    {item.display}
+                                </Text>
+                            </View>
+                        ))}
+                        {sequenceToPlay.length > 5 && (
+                            <Text style={styles.moreText}>+{sequenceToPlay.length - 5} more</Text>
+                        )}
+                    </View>
+                )}
             </View>
 
             <View style={styles.micContainer}>
@@ -290,5 +311,39 @@ const styles = StyleSheet.create({
         color: '#888888',
         fontSize: 14,
         marginTop: 15,
+    },
+    sequenceContainer: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        justifyContent: 'center',
+        marginTop: 15,
+        gap: 8,
+    },
+    sequenceBadge: {
+        backgroundColor: 'rgba(0, 229, 255, 0.15)',
+        paddingHorizontal: 12,
+        paddingVertical: 6,
+        borderRadius: 12,
+        borderWidth: 1,
+        borderColor: 'rgba(0, 229, 255, 0.5)',
+    },
+    sequenceText: {
+        color: '#00e5ff',
+        fontSize: 12,
+        fontWeight: 'bold',
+    },
+    moreText: {
+        color: '#888888',
+        fontSize: 12,
+        alignSelf: 'center',
+    },
+    debugInfo: {
+        marginTop: 5,
+        opacity: 0.6,
+    },
+    debugText: {
+        color: '#00e5ff',
+        fontSize: 10,
+        fontFamily: 'monospace',
     },
 });

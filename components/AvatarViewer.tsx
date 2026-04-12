@@ -39,6 +39,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { VRM, VRMUtils, VRMLoaderPlugin } from '@pixiv/three-vrm';
 import { AvatarAnimator } from '../lib/AvatarAnimator';
+import { SequenceItem } from '../lib/labels';
 
 // Apply Polyfills for all Three.js Loaders to intercept and prevent native execution hangs
 ['ImageLoader', 'ImageBitmapLoader', 'TextureLoader', 'FileLoader'].forEach((loaderName) => {
@@ -106,6 +107,7 @@ interface AvatarViewerProps {
     style?: ViewStyle;
     signToPlay?: string | null;
     letterToPlay?: string | null;
+    sequenceToPlay?: SequenceItem[] | null;
     avatarUri?: string;
 }
 
@@ -115,6 +117,7 @@ export default function AvatarViewer({
     style,
     signToPlay,
     letterToPlay,
+    sequenceToPlay,
     avatarUri = './avatar.vrm'
 }: AvatarViewerProps) {
     const glRef = useRef<ExpoWebGLRenderingContext | null>(null);
@@ -262,7 +265,8 @@ export default function AvatarViewer({
             onVRMLoaded?.();
 
             // Play any outstanding animation requests
-            if (signToPlay) animator.playSignAnimation(signToPlay);
+            if (sequenceToPlay && sequenceToPlay.length > 0) animator.playSequence(sequenceToPlay);
+            else if (signToPlay) animator.playSignAnimation(signToPlay);
             else if (letterToPlay) animator.playLetterAnimation(letterToPlay);
 
             // ⬇️ Load GLB animations quietly in the background AFTER avatar is shown
@@ -279,7 +283,9 @@ export default function AvatarViewer({
             { keyword: 'GOOD MORNING', file: require('../assets/good_morning.glb') },
             { keyword: 'GOOD EVENING', file: require('../assets/good_evening.glb') },
             { keyword: 'GOOD NIGHT', file: require('../assets/good_night.glb') },
-            // Add more animations here!
+            { keyword: 'MAGANDANG UMAGA', file: require('../assets/good_morning.glb') },
+            { keyword: 'MAGANDANG GABI', file: require('../assets/good_evening.glb') },
+
         ];
 
         console.log(`[Avatar] Background-loading ${customAnimations.length} GLB animations...`);
@@ -322,6 +328,12 @@ export default function AvatarViewer({
             animatorRef.current.playLetterAnimation(letterToPlay);
         }
     }, [letterToPlay, signToPlay]);
+
+    useEffect(() => {
+        if (sequenceToPlay && sequenceToPlay.length > 0 && animatorRef.current) {
+            animatorRef.current.playSequence(sequenceToPlay);
+        }
+    }, [sequenceToPlay]);
 
     useEffect(() => {
         return () => {

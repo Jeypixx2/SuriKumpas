@@ -112,7 +112,14 @@ export const FSL_LABELS: FSLLabel[] = [
     { id: 103, english: "SUGAR",              filipino: "ASUKAL",               category: "DRINK" },
     { id: 104, english: "NO SUGAR",           filipino: "WALANG ASUKAL",        category: "DRINK" },
     { id: 105, english: "GOOD NIGHT",         filipino: "MAGANDANG GABI POH",   category: "GREETING" },
+    { id: 106, english: "GOODBYE",            filipino: "PAALAM",               category: "GREETING" },
 ];
+
+export interface SequenceItem {
+    type: 'sign' | 'letter';
+    value: string;
+    display: string;
+}
 
 export function getLabelById(id: number): FSLLabel {
     return FSL_LABELS[id] ?? { id, english: "UNKNOWN", filipino: "HINDI KILALA", category: "UNKNOWN" };
@@ -127,6 +134,68 @@ export function matchSpeechToLabel(speech: string): FSLLabel | null {
         FSL_LABELS.find(l => normalized.includes(l.filipino)) ??
         null
     );
+}
+
+/**
+ * Greedily tokenizes a sentence into known sign language phrases and fingerspelling fallback.
+ * Example: "GOOD MORNING JOHN" -> [ {type: 'sign', value: 'GOOD MORNING'}, {type: 'letter', value: 'J'}, ... ]
+ */
+export function tokenizeSentence(sentence: string): SequenceItem[] {
+    const normalized = sentence.toUpperCase().trim();
+    if (!normalized) return [];
+
+    let sequence: SequenceItem[] = [];
+    let currentIndex = 0;
+
+    // Sort labels by length (descending) to ensure greedy matching (longer phrases first)
+    const sortedLabels = [...FSL_LABELS].sort((a, b) => b.english.length - a.english.length);
+
+    const words = normalized.split(/\s+/);
+    
+    for (let i = 0; i < words.length; i++) {
+        const word = words[i];
+        
+        // Check if this word (or this word + next word) matches an FSL label
+        let matched = false;
+
+        // Greedy check: look ahead for multi-word phrases (e.g., "GOOD MORNING")
+        // We check up to 3 upcoming words for a match
+        for (let lookAhead = 2; lookAhead >= 0; lookAhead--) {
+            if (i + lookAhead >= words.length) continue;
+            
+            const candidatePhrase = words.slice(i, i + lookAhead + 1).join(' ');
+            const label = FSL_LABELS.find(l => 
+                l.english === candidatePhrase || 
+                l.filipino === candidatePhrase
+            );
+
+            if (label) {
+                sequence.push({ 
+                    type: 'sign', 
+                    value: label.english,
+                    display: candidatePhrase // Show what they actually said
+                });
+                i += lookAhead; // Skip the consumed words
+                matched = true;
+                break;
+            }
+        }
+
+        if (!matched) {
+            // Fingerspell it
+            for (const char of word) {
+                if (ALPHABET_LABELS.includes(char)) {
+                    sequence.push({ 
+                        type: 'letter', 
+                        value: char,
+                        display: char
+                    });
+                }
+            }
+        }
+    }
+
+    return sequence;
 }
 
 export const ALPHABET_LABELS: string[] = [

@@ -23,6 +23,11 @@ export interface VRM {
     humanoid: VRMHumanoid;
 }
 
+export interface SequenceItem {
+    type: 'sign' | 'letter';
+    value: string;
+}
+
 export class AvatarAnimator {
     private vrm: VRM | null = null;
     private mixer: THREE.AnimationMixer | null = null;
@@ -30,6 +35,9 @@ export class AvatarAnimator {
     private idleAction: THREE.AnimationAction | null = null;
     private currentSignAction: THREE.AnimationAction | null = null;
     private isPlayingSign: boolean = false;
+
+    private queue: SequenceItem[] = [];
+    private isProcessingQueue: boolean = false;
 
     private signAnimations: Map<string, THREE.AnimationClip> = new Map();
     private letterAnimations: Map<string, THREE.AnimationClip> = new Map();
@@ -130,8 +138,9 @@ export class AvatarAnimator {
             // 1. Is this node known in our map?
             const vrmBoneName = boneMap[nodeName];
             if (vrmBoneName) {
-                // 2. Does the VRM actually have this bone?
-                const humanBone = (this.vrm as any).humanoid.getRawBoneNode(vrmBoneName) || (this.vrm as any).humanoid.humanBones[vrmBoneName]?.node;
+                // 2. Does the VRM actually have this bone? Use VRM 2.0-compliant methods
+                const humanoid = (this.vrm as any).humanoid;
+                const humanBone = humanoid.getBoneNode?.(vrmBoneName) || humanoid.getRawBoneNode?.(vrmBoneName) || humanoid.humanBones?.[vrmBoneName]?.node;
                 
                 if (humanBone) {
                     // Update track name to the actual unique Three.js node name of the VRM bone
@@ -153,8 +162,9 @@ export class AvatarAnimator {
     private generateIdleAnimation(): void {
         if (!this.vrm) return;
 
-        const spine = this.vrm.humanoid.humanBones.spine?.node;
-        const chest = this.vrm.humanoid.humanBones.chest?.node;
+        const humanoid = (this.vrm as any).humanoid;
+        const spine = humanoid.getBoneNode?.('spine') || humanoid.humanBones?.spine?.node;
+        const chest = humanoid.getBoneNode?.('chest') || humanoid.humanBones?.chest?.node;
 
         const times = [0, 1.5, 3];
         const spineValues: number[] = [];
@@ -324,19 +334,22 @@ export class AvatarAnimator {
     private getAnimationBones() {
         if (!this.vrm) return null;
 
+        const h = (this.vrm as any).humanoid;
+        const get = (name: string) => h.getBoneNode?.(name) || h.humanBones?.[name]?.node;
+
         return {
-            rightUpperArm: this.vrm.humanoid.humanBones.rightUpperArm?.node,
-            rightLowerArm: this.vrm.humanoid.humanBones.rightLowerArm?.node,
-            rightHand: this.vrm.humanoid.humanBones.rightHand?.node,
-            leftUpperArm: this.vrm.humanoid.humanBones.leftUpperArm?.node,
-            leftLowerArm: this.vrm.humanoid.humanBones.leftLowerArm?.node,
-            leftHand: this.vrm.humanoid.humanBones.leftHand?.node,
-            rightThumb: this.vrm.humanoid.humanBones.rightThumbProximal?.node,
-            rightIndex: this.vrm.humanoid.humanBones.rightIndexProximal?.node,
-            rightMiddle: this.vrm.humanoid.humanBones.rightMiddleProximal?.node,
-            leftThumb: this.vrm.humanoid.humanBones.leftThumbProximal?.node,
-            leftIndex: this.vrm.humanoid.humanBones.leftIndexProximal?.node,
-            leftMiddle: this.vrm.humanoid.humanBones.leftMiddleProximal?.node
+            rightUpperArm: get('rightUpperArm'),
+            rightLowerArm: get('rightLowerArm'),
+            rightHand: get('rightHand'),
+            leftUpperArm: get('leftUpperArm'),
+            leftLowerArm: get('leftLowerArm'),
+            leftHand: get('leftHand'),
+            rightThumb: get('rightThumbProximal'),
+            rightIndex: get('rightIndexProximal'),
+            rightMiddle: get('rightMiddleProximal'),
+            leftThumb: get('leftThumbProximal'),
+            leftIndex: get('leftIndexProximal'),
+            leftMiddle: get('leftMiddleProximal')
         };
     }
 
@@ -413,72 +426,78 @@ export class AvatarAnimator {
         this.idleAction.play();
     }
 
-    playSignAnimation(signName: string): void {
-        console.log(`[AvatarAnimator] Request to play sign: ${signName}`);
-        if (!this.mixer) {
-            console.warn('[AvatarAnimator] Mixer not initialized');
-            return;
+    /**
+     * Entry point for playing a full sequence of animations.
+     * Restarts the queue if not already processing.
+     */
+    /**
+     * Entry point for playing a full sequence of animations.
+     * Simple recursive process to avoid async lag.
+     */
+    playSequence(sequence: SequenceItem[]): void {
+        this.queue = [...sequence];
+        if (!this.isProcessingQueue) {
+            this.processNextInQueue();
         }
-        if (this.isPlayingSign) {
-            console.warn('[AvatarAnimator] Already playing a sign, ignoring request.');
+    }
+
+    private processNextInQueue(): void {
+        if (!this.mixer || this.queue.length === 0) {
+            this.isProcessingQueue = false;
+            this.isPlayingSign = false;
+            this.currentSignAction = null;
+            this.startIdleAnimation();
             return;
         }
 
-        const clip = this.signAnimations.get(signName);
+        this.isProcessingQueue = true;
+        const nextItem = this.queue.shift();
+        if (!nextItem) return;
+
+        const clip = nextItem.type === 'sign' 
+            ? this.signAnimations.get(nextItem.value) 
+            : this.letterAnimations.get(nextItem.value.toUpperCase());
+
         if (!clip) {
-            console.warn(`Sign animation not found: ${signName}`);
+            this.processNextInQueue();
             return;
         }
 
-        if (this.idleAction) {
-            this.idleAction.stop();
+        const nextAction = this.mixer.clipAction(clip);
+        nextAction.setLoop(THREE.LoopOnce, 1);
+        nextAction.clampWhenFinished = true;
+        nextAction.reset();
+
+        if (this.currentSignAction) {
+            nextAction.play();
+            nextAction.crossFadeFrom(this.currentSignAction, 0.15, true);
+        } else {
+            if (this.idleAction) this.idleAction.fadeOut(0.3);
+            nextAction.play();
         }
 
-        this.currentSignAction = this.mixer.clipAction(clip);
-        this.currentSignAction.setLoop(THREE.LoopOnce, 1);
-        this.currentSignAction.clampWhenFinished = true;
-        this.currentSignAction.play();
+        this.currentSignAction = nextAction;
         this.isPlayingSign = true;
 
+        // Use a simple timer to advance the queue - most reliable and lag-free in React Native
+        const delay = (clip.duration * 1000) + 150;
         setTimeout(() => {
-            this.stopSignAnimation();
-        }, (clip.duration * 1000) + 2000);
+            this.processNextInQueue();
+        }, delay);
+    }
+
+    playSignAnimation(signName: string): void {
+        this.playSequence([{ type: 'sign', value: signName }]);
     }
 
     playLetterAnimation(letter: string): void {
-        console.log(`[AvatarAnimator] Request to play letter: ${letter}`);
-        if (!this.mixer) {
-            console.warn('[AvatarAnimator] Mixer not initialized');
-            return;
-        }
-        if (this.isPlayingSign) {
-            console.warn('[AvatarAnimator] Already playing a sign, ignoring request.');
-            return;
-        }
-
-        const clip = this.letterAnimations.get(letter.toUpperCase());
-        if (!clip) {
-            console.warn(`Letter animation not found: ${letter}`);
-            return;
-        }
-
-        if (this.idleAction) {
-            this.idleAction.stop();
-        }
-
-        this.currentSignAction = this.mixer.clipAction(clip);
-        this.currentSignAction.setLoop(THREE.LoopOnce, 1);
-        this.currentSignAction.clampWhenFinished = true;
-        this.currentSignAction.play();
-        this.isPlayingSign = true;
-
-        setTimeout(() => {
-            this.stopSignAnimation();
-        }, (clip.duration * 1000) + 1000);
+        this.playSequence([{ type: 'letter', value: letter }]);
     }
 
     stopSignAnimation(): void {
-        console.log('[AvatarAnimator] Stopping current animation');
+        console.log('[AvatarAnimator] Resetting whole queue');
+        this.queue = [];
+        this.isProcessingQueue = false;
         if (this.currentSignAction) {
             this.currentSignAction.stop();
             this.currentSignAction = null;
