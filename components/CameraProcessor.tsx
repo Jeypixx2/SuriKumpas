@@ -11,6 +11,7 @@ interface CameraProcessorProps {
 
 export interface CameraProcessorRef {
     captureFrame: () => void;
+    speak: (text: string, lang?: string) => void;
 }
 
 const MEDIAPIPE_SCRIPT = `
@@ -19,9 +20,9 @@ const MEDIAPIPE_SCRIPT = `
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/holistic/holistic.js" crossorigin="anonymous"></script>
     <script>
-        const videoElement = document.getElementById('input_video');
-        const canvasElement = document.getElementById('output_canvas');
-        const canvasCtx = canvasElement.getContext('2d');
+        let videoElement = null;
+        let canvasElement = null;
+        let canvasCtx = null;
         
         let holistic = null;
         let camera = null;
@@ -39,6 +40,16 @@ const MEDIAPIPE_SCRIPT = `
                 window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'log', message: String(msg) }));
             }
         }
+
+        window.speakText = function(text, lang) {
+            if ('speechSynthesis' in window) {
+                const utterance = new SpeechSynthesisUtterance(text);
+                utterance.lang = lang || 'fil-PH';
+                utterance.pitch = 1.0;
+                utterance.rate = 1.0;
+                window.speechSynthesis.speak(utterance);
+            }
+        };
         
         function extractKeypoints(results) {
             const keypoints = [];
@@ -91,33 +102,39 @@ const MEDIAPIPE_SCRIPT = `
             canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
             canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
             
+            canvasCtx.shadowColor = '#00E5FF';
+            canvasCtx.shadowBlur = 8;
+            
             if (results.poseLandmarks) {
                 drawConnectors(canvasCtx, results.poseLandmarks, POSE_CONNECTIONS,
-                    {color: '#00E5FF', lineWidth: 2});
+                    {color: '#00E5FF', lineWidth: 3});
                 drawLandmarks(canvasCtx, results.poseLandmarks,
-                    {color: '#FF0000', lineWidth: 1, radius: 3});
-            }
-            
-            if (results.faceLandmarks) {
-                drawConnectors(canvasCtx, results.faceLandmarks, FACEMESH_TESSELATION,
-                    {color: '#00E5FF', lineWidth: 1});
+                    {color: '#FF2A85', lineWidth: 2, radius: 4});
             }
             
             if (results.leftHandLandmarks) {
                 drawConnectors(canvasCtx, results.leftHandLandmarks, HAND_CONNECTIONS,
-                    {color: '#00E5FF', lineWidth: 2});
+                    {color: '#00E5FF', lineWidth: 3});
                 drawLandmarks(canvasCtx, results.leftHandLandmarks,
-                    {color: '#00FF00', lineWidth: 1, radius: 3});
+                    {color: '#00FFCC', lineWidth: 2, radius: 4});
             }
             
             if (results.rightHandLandmarks) {
                 drawConnectors(canvasCtx, results.rightHandLandmarks, HAND_CONNECTIONS,
-                    {color: '#00E5FF', lineWidth: 2});
+                    {color: '#00E5FF', lineWidth: 3});
                 drawLandmarks(canvasCtx, results.rightHandLandmarks,
-                    {color: '#00FF00', lineWidth: 1, radius: 3});
+                    {color: '#00FFCC', lineWidth: 2, radius: 4});
             }
             
+            canvasCtx.shadowBlur = 0;
             canvasCtx.restore();
+
+            const leftHand = results.leftHandLandmarks || [];
+            const rightHand = results.rightHandLandmarks || [];
+            if (leftHand.length === 0 && rightHand.length === 0) {
+                // Drop the frame if no hands are visible to prevent immense JSON lag
+                return;
+            }
             
             const keypoints = extractKeypoints(results);
             window.ReactNativeWebView.postMessage(JSON.stringify({
@@ -130,6 +147,10 @@ const MEDIAPIPE_SCRIPT = `
             try {
                 log('Initializing Holistic...');
                 
+                videoElement = document.getElementById('input_video');
+                canvasElement = document.getElementById('output_canvas');
+                canvasCtx = canvasElement.getContext('2d');
+                
                 if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
                     log('CRITICAL: getUserMedia is NOT available!');
                 } else {
@@ -141,11 +162,11 @@ const MEDIAPIPE_SCRIPT = `
                 }});
             
             holistic.setOptions({
-                modelComplexity: 1,
+                modelComplexity: 0,
                 smoothLandmarks: true,
                 enableSegmentation: false,
                 smoothSegmentation: false,
-                refineFaceLandmarks: true,
+                refineFaceLandmarks: false,
                 minDetectionConfidence: 0.5,
                 minTrackingConfidence: 0.5
             });
@@ -156,12 +177,16 @@ const MEDIAPIPE_SCRIPT = `
                 onFrame: async () => {
                     if (!isProcessing) {
                         isProcessing = true;
-                        await holistic.send({image: videoElement});
-                        isProcessing = false;
+                        try {
+                            await holistic.send({image: videoElement});
+                        } finally {
+                            // Yield back to browser microtask queue to unblock UI thread
+                            setTimeout(() => { isProcessing = false }, 10);
+                        }
                     }
                 },
-                width: 640,
-                height: 480
+                width: 320,
+                height: 240
             });
             
                 camera.start().then(() => log('Camera started successfully')).catch(e => log('Camera start failed: ' + e.message));
@@ -179,10 +204,13 @@ const CameraProcessor = forwardRef<CameraProcessorRef, CameraProcessorProps>(
         const [permission, requestPermission] = useCameraPermissions();
         const [htmlUri, setHtmlUri] = useState<string | null>(null);
         const webViewRef = useRef<WebView>(null);
-        const cameraRef = useRef<CameraView>(null);
 
         useImperativeHandle(ref, () => ({
             captureFrame: () => {
+            },
+            speak: (text: string, lang: string = 'fil-PH') => {
+                const js = `window.speakText("${text}", "${lang}"); true;`;
+                webViewRef.current?.injectJavaScript(js);
             }
         }));
 
@@ -192,36 +220,34 @@ const CameraProcessor = forwardRef<CameraProcessorRef, CameraProcessorProps>(
             }
         }, [permission, requestPermission]);
 
-        useEffect(() => {
-            const prepareHtmlFile = async () => {
-                const htmlContent = `
-                    <!DOCTYPE html>
-                    <html>
-                    <head>
-                        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                        <style>
-                            body { margin: 0; overflow: hidden; background: #1a1a1a; }
-                            #input_video { display: none; }
-                            #output_canvas { width: 100%; height: 100%; border: 2px solid cyan; }
-                        </style>
-                        ${MEDIAPIPE_SCRIPT}
-                    </head>
-                    <body>
-                        <video id="input_video"></video>
-                        <canvas id="output_canvas" width="640" height="480"></canvas>
-                    </body>
-                    </html>
-                `;
-                const filePath = FileSystem.cacheDirectory + 'mediapipe.html';
-                try {
-                    await FileSystem.writeAsStringAsync(filePath, htmlContent);
-                    setHtmlUri('file://' + filePath);
-                } catch (e) {
-                    console.error('Failed to write mediapipe file', e);
-                }
-            };
-            prepareHtmlFile();
-        }, []);
+        const htmlContent = `
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <style>
+                    body { margin: 0; overflow: hidden; background: #1a1a1a; }
+                    #input_video { display: none; }
+                    #output_canvas { width: 100%; height: 100%; border: 2px solid cyan; }
+                </style>
+                <script>
+                    window.onerror = function(msg) {
+                        try { window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'log', message: 'Early Error: ' + msg })); } catch(e){}
+                    };
+                    setTimeout(() => {
+                        if (window.ReactNativeWebView) {
+                            window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'log', message: 'HTML Injected successfully!' }));
+                        }
+                    }, 100);
+                </script>
+                ${MEDIAPIPE_SCRIPT}
+            </head>
+            <body>
+                <video id="input_video" playsinline></video>
+                <canvas id="output_canvas" width="640" height="480"></canvas>
+            </body>
+            </html>
+        `;
 
         const onMessage = useCallback((event: any) => {
             try {
@@ -236,7 +262,7 @@ const CameraProcessor = forwardRef<CameraProcessorRef, CameraProcessorProps>(
                 console.error('Error parsing WebView message:', error);
             }
         }, [onKeypointsExtracted]);
-
+        
         if (!permission?.granted) {
             return (
                 <View style={[styles.container, styles.centered, style]}>
@@ -245,22 +271,13 @@ const CameraProcessor = forwardRef<CameraProcessorRef, CameraProcessorProps>(
             );
         }
 
-        if (!htmlUri) {
-            return (
-                <View style={[styles.container, styles.centered, style]}>
-                    <ActivityIndicator size="large" color="#00E5FF" />
-                    <Text style={styles.permissionText}>Securing Camera Bridge...</Text>
-                </View>
-            );
-        }
-
         return (
             <View style={[styles.container, style]}>
                 <WebView
                     ref={webViewRef}
-                    style={styles.webView}
+                    style={[styles.webView, { backgroundColor: 'transparent' }]}
                     originWhitelist={['*']}
-                    source={{ uri: htmlUri }}
+                    source={{ html: htmlContent, baseUrl: 'https://www.google.com' }}
                     onMessage={onMessage}
                     javaScriptEnabled={true}
                     domStorageEnabled={true}
@@ -269,13 +286,28 @@ const CameraProcessor = forwardRef<CameraProcessorRef, CameraProcessorProps>(
                     allowFileAccessFromFileURLs={true}
                     allowUniversalAccessFromFileURLs={true}
                     mediaCapturePermissionGrantType="grant"
+                    // @ts-ignore: Prop may not be exposed in local library typings
+                    onPermissionRequest={(event: any) => {
+                        event.grant();
+                    }}
+                    onError={(syntheticEvent) => {
+                        const { nativeEvent } = syntheticEvent;
+                        console.error('WebView error: ', nativeEvent);
+                    }}
+                    onHttpError={(syntheticEvent) => {
+                        const { nativeEvent } = syntheticEvent;
+                        console.error('WebView HTTP error: ', nativeEvent);
+                    }}
+                    renderError={(errorDomain, errorCode, errorDesc) => (
+                        <View style={[StyleSheet.absoluteFill, { backgroundColor: '#1a1a1a', justifyContent: 'center', alignItems: 'center' }]}>
+                            <Text style={{ color: 'red', textAlign: 'center' }}>WebView Crashed: {errorDesc} ({errorCode})</Text>
+                        </View>
+                    )}
                 />
             </View>
         );
     }
 );
-
-const { width, height } = Dimensions.get('window');
 
 const styles = StyleSheet.create({
     container: {
@@ -284,8 +316,7 @@ const styles = StyleSheet.create({
     },
     webView: {
         flex: 1,
-        width: width,
-        height: height,
+        backgroundColor: 'transparent',
     },
     centered: {
         justifyContent: 'center',

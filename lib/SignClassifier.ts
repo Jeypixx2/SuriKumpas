@@ -1,64 +1,99 @@
-// TODO: Replace with real TFLite inference when using custom Expo build
-// This is a mock implementation for Expo Go compatibility
-// Real TFLite models require react-native-fast-tflite which needs custom native builds
-
 import { FSL_LABELS, ALPHABET_LABELS } from './labels';
+import { loadTensorflowModel, TensorflowModel } from 'react-native-fast-tflite';
 
 export class SignClassifier {
-    private fslModelLoaded: boolean = false;
-    private alphabetModelLoaded: boolean = false;
+    private fslModel: TensorflowModel | null = null;
+    private alphabetModel: TensorflowModel | null = null;
 
     async loadFSLModel(): Promise<void> {
-        // Simulate model loading delay
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        this.fslModelLoaded = true;
-        console.log('[Mock] FSL model loaded');
+        try {
+            this.fslModel = await loadTensorflowModel(require('../assets/fsl_model.tflite'), []);
+            console.log('[TFLite] FSL model loaded successfully');
+        } catch (e) {
+            console.error('[TFLite] Failed to load FSL model', e);
+        }
     }
 
     async loadAlphabetModel(): Promise<void> {
-        // Simulate model loading delay
-        await new Promise(resolve => setTimeout(resolve, 800));
-        this.alphabetModelLoaded = true;
-        console.log('[Mock] Alphabet model loaded');
+        try {
+            this.alphabetModel = await loadTensorflowModel(require('../assets/alphabet_model.tflite'), []);
+            console.log('[TFLite] Alphabet model loaded successfully');
+        } catch (e) {
+            console.error('[TFLite] Failed to load Alphabet model', e);
+        }
     }
 
     isFSLModelLoaded(): boolean {
-        return this.fslModelLoaded;
+        return this.fslModel !== null;
     }
 
     isAlphabetModelLoaded(): boolean {
-        return this.alphabetModelLoaded;
+        return this.alphabetModel !== null;
     }
 
-    classifyFSL(frames: Float32Array[]): { labelIndex: number; confidence: number } {
-        if (!this.fslModelLoaded) {
+    async classifyFSL(frames: Float32Array[]): Promise<{ labelIndex: number; confidence: number }> {
+        if (!this.fslModel) {
             throw new Error('FSL model not loaded');
         }
-
         if (frames.length !== 30) {
             throw new Error(`Expected 30 frames, got ${frames.length}`);
         }
 
-        // Return random label with 70-99% confidence
-        const randomIndex = Math.floor(Math.random() * FSL_LABELS.length);
-        const confidence = 0.70 + Math.random() * 0.29; // 0.70 to 0.99
-
-        return { labelIndex: randomIndex, confidence };
-    }
-
-    classifyAlphabet(frame: Float32Array): { letterIndex: number; confidence: number } {
-        if (!this.alphabetModelLoaded) {
-            throw new Error('Alphabet model not loaded');
+        // Flatten the 30 frames into a 1D array
+        const inputSize = 30 * 1662;
+        const flatInput = new Float32Array(inputSize);
+        for (let i = 0; i < 30; i++) {
+            flatInput.set(frames[i], i * 1662);
         }
 
+        // Run the model asynchronously using the ArrayBuffer to prevent UI lag
+        const outputTensor = await this.fslModel.run([flatInput.buffer]);
+        const outputData = new Float32Array(outputTensor[0]);
+        
+        let predictedIdx = 0;
+        let maxConfidence = 0;
+        
+        for (let i = 0; i < outputData.length; i++) {
+            const conf = outputData[i];
+            if (conf > maxConfidence) {
+                maxConfidence = conf;
+                predictedIdx = i;
+            }
+        }
+
+        if (maxConfidence > 1.0) {
+            maxConfidence = maxConfidence / 255.0;
+        }
+
+        return { labelIndex: predictedIdx, confidence: maxConfidence };
+    }
+
+    async classifyAlphabet(frame: Float32Array): Promise<{ letterIndex: number; confidence: number }> {
+        if (!this.alphabetModel) {
+            throw new Error('Alphabet model not loaded');
+        }
         if (frame.length !== 1662) {
             throw new Error(`Expected 1662 keypoints, got ${frame.length}`);
         }
 
-        // Return random letter with 70-99% confidence
-        const randomIndex = Math.floor(Math.random() * ALPHABET_LABELS.length);
-        const confidence = 0.70 + Math.random() * 0.29; // 0.70 to 0.99
+        const outputTensor = await this.alphabetModel.run([frame.buffer as ArrayBuffer]);
+        const outputData = new Float32Array(outputTensor[0]);
+        
+        let predictedIdx = 0;
+        let maxConfidence = 0;
+        
+        for (let i = 0; i < outputData.length; i++) {
+            const conf = outputData[i];
+            if (conf > maxConfidence) {
+                maxConfidence = conf;
+                predictedIdx = i;
+            }
+        }
 
-        return { letterIndex: randomIndex, confidence };
+        if (maxConfidence > 1.0) {
+            maxConfidence = maxConfidence / 255.0;
+        }
+
+        return { letterIndex: predictedIdx, confidence: maxConfidence };
     }
 }

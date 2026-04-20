@@ -53,10 +53,7 @@ export default function ResultOverlay({ label, confidence, visible }: ResultOver
 
 const styles = StyleSheet.create({
     container: {
-        position: 'absolute',
-        top: 60,
-        left: 20,
-        right: 20,
+        width: '85%',
         backgroundColor: 'rgba(10, 10, 10, 0.9)',
         borderRadius: 16,
         borderWidth: 1,
