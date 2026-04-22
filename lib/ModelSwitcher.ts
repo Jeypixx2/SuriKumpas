@@ -3,11 +3,11 @@ const HAND_END_INDEX = HAND_START_INDEX + 21 * 3 + 21 * 3;
 
 export class ModelSwitcher {
     private previousHandKeypoints: number[] | null = null;
-    private movementThreshold: number = 0.05;
+    private movementThreshold: number = 0.02;
     private stillFrameCount: number = 0;
     private movingFrameCount: number = 0;
-    private readonly stillThreshold = 5;
-    private readonly movingThreshold = 3;
+    private readonly stillThreshold = 10;
+    private readonly movingThreshold = 2;
 
     detectMovement(keypoints: Float32Array): { isMoving: boolean; confidence: number } {
         const currentHandKeypoints = this.extractHandKeypoints(keypoints);

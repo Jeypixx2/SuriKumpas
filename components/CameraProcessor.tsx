@@ -23,20 +23,18 @@ const MEDIAPIPE_SCRIPT = `
         let videoElement = null;
         let canvasElement = null;
         let canvasCtx = null;
-        
         let holistic = null;
-        let camera = null;
         let isProcessing = false;
 
-        window.onerror = function(msg, url, line) {
-            if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
-                window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'log', message: 'WebView Error: ' + msg }));
+        window.onerror = function(msg) {
+            if (window.ReactNativeWebView) {
+                window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'log', message: 'Error: ' + msg }));
             }
             return true;
         };
 
         function log(msg) {
-            if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
+            if (window.ReactNativeWebView) {
                 window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'log', message: String(msg) }));
             }
         }
@@ -45,153 +43,117 @@ const MEDIAPIPE_SCRIPT = `
             if ('speechSynthesis' in window) {
                 const utterance = new SpeechSynthesisUtterance(text);
                 utterance.lang = lang || 'fil-PH';
-                utterance.pitch = 1.0;
-                utterance.rate = 1.0;
                 window.speechSynthesis.speak(utterance);
             }
         };
         
+        function r(n) { return Math.round(n * 10000) / 10000; }
+
         function extractKeypoints(results) {
-            const keypoints = [];
+            const kp = [];
             
-            const poseLandmarks = results.poseLandmarks || [];
+            // Pose: 33 * 4 = 132 values
+            const pose = results.poseLandmarks || [];
             for (let i = 0; i < 33; i++) {
-                if (i < poseLandmarks.length) {
-                    const lm = poseLandmarks[i];
-                    keypoints.push(lm.x, lm.y, lm.z, lm.visibility || 1.0);
-                } else {
-                    keypoints.push(0, 0, 0, 0);
-                }
+                if (i < pose.length) { const lm = pose[i]; kp.push(r(lm.x), r(lm.y), r(lm.z), r(lm.visibility || 1)); }
+                else { kp.push(0, 0, 0, 0); }
             }
             
-            const faceLandmarks = results.faceLandmarks || [];
+            // Face: 468 * 3 = 1404 values — model was trained with this, MUST include real data
+            const face = results.faceLandmarks || [];
             for (let i = 0; i < 468; i++) {
-                if (i < faceLandmarks.length) {
-                    const lm = faceLandmarks[i];
-                    keypoints.push(lm.x, lm.y, lm.z);
-                } else {
-                    keypoints.push(0, 0, 0);
-                }
+                if (i < face.length) { const lm = face[i]; kp.push(r(lm.x), r(lm.y), r(lm.z)); }
+                else { kp.push(0, 0, 0); }
             }
             
-            const leftHandLandmarks = results.leftHandLandmarks || [];
+            // Left hand: 21 * 3 = 63 values
+            const lh = results.leftHandLandmarks || [];
             for (let i = 0; i < 21; i++) {
-                if (i < leftHandLandmarks.length) {
-                    const lm = leftHandLandmarks[i];
-                    keypoints.push(lm.x, lm.y, lm.z);
-                } else {
-                    keypoints.push(0, 0, 0);
-                }
+                if (i < lh.length) { const lm = lh[i]; kp.push(r(lm.x), r(lm.y), r(lm.z)); }
+                else { kp.push(0, 0, 0); }
             }
             
-            const rightHandLandmarks = results.rightHandLandmarks || [];
+            // Right hand: 21 * 3 = 63 values
+            const rh = results.rightHandLandmarks || [];
             for (let i = 0; i < 21; i++) {
-                if (i < rightHandLandmarks.length) {
-                    const lm = rightHandLandmarks[i];
-                    keypoints.push(lm.x, lm.y, lm.z);
-                } else {
-                    keypoints.push(0, 0, 0);
-                }
+                if (i < rh.length) { const lm = rh[i]; kp.push(r(lm.x), r(lm.y), r(lm.z)); }
+                else { kp.push(0, 0, 0); }
             }
             
-            return new Float32Array(keypoints);
+            return kp;
         }
         
         function onResults(results) {
             canvasCtx.save();
             canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
-            canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
             
-            canvasCtx.shadowColor = '#00E5FF';
-            canvasCtx.shadowBlur = 8;
-            
-            if (results.poseLandmarks) {
-                drawConnectors(canvasCtx, results.poseLandmarks, POSE_CONNECTIONS,
-                    {color: '#00E5FF', lineWidth: 3});
-                drawLandmarks(canvasCtx, results.poseLandmarks,
-                    {color: '#FF2A85', lineWidth: 2, radius: 4});
-            }
-            
+            // Draw hands only — pose skeleton is expensive and irrelevant for sign classification
             if (results.leftHandLandmarks) {
-                drawConnectors(canvasCtx, results.leftHandLandmarks, HAND_CONNECTIONS,
-                    {color: '#00E5FF', lineWidth: 3});
-                drawLandmarks(canvasCtx, results.leftHandLandmarks,
-                    {color: '#00FFCC', lineWidth: 2, radius: 4});
+                drawConnectors(canvasCtx, results.leftHandLandmarks, HAND_CONNECTIONS, {color: '#00FFCC', lineWidth: 2});
+                drawLandmarks(canvasCtx, results.leftHandLandmarks, {color: '#ffffff', lineWidth: 1, radius: 3});
             }
-            
             if (results.rightHandLandmarks) {
-                drawConnectors(canvasCtx, results.rightHandLandmarks, HAND_CONNECTIONS,
-                    {color: '#00E5FF', lineWidth: 3});
-                drawLandmarks(canvasCtx, results.rightHandLandmarks,
-                    {color: '#00FFCC', lineWidth: 2, radius: 4});
+                drawConnectors(canvasCtx, results.rightHandLandmarks, HAND_CONNECTIONS, {color: '#00FFCC', lineWidth: 2});
+                drawLandmarks(canvasCtx, results.rightHandLandmarks, {color: '#ffffff', lineWidth: 1, radius: 3});
             }
             
-            canvasCtx.shadowBlur = 0;
             canvasCtx.restore();
 
-            const leftHand = results.leftHandLandmarks || [];
-            const rightHand = results.rightHandLandmarks || [];
-            if (leftHand.length === 0 && rightHand.length === 0) {
-                // Drop the frame if no hands are visible to prevent immense JSON lag
-                return;
-            }
+            const lh = results.leftHandLandmarks || [];
+            const rh = results.rightHandLandmarks || [];
+            if (lh.length === 0 && rh.length === 0) return;
             
-            const keypoints = extractKeypoints(results);
             window.ReactNativeWebView.postMessage(JSON.stringify({
                 type: 'keypoints',
-                data: Array.from(keypoints)
+                data: extractKeypoints(results)
             }));
         }
         
         async function initHolistic() {
             try {
-                log('Initializing Holistic...');
-                
+                log('Initializing...');
                 videoElement = document.getElementById('input_video');
                 canvasElement = document.getElementById('output_canvas');
                 canvasCtx = canvasElement.getContext('2d');
-                
-                if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-                    log('CRITICAL: getUserMedia is NOT available!');
-                } else {
-                    log('getUserMedia is available.');
-                }
 
-                holistic = new Holistic({locateFile: (file) => {
-                    return 'https://cdn.jsdelivr.net/npm/@mediapipe/holistic/' + file;
-                }});
-            
-            holistic.setOptions({
-                modelComplexity: 0,
-                smoothLandmarks: true,
-                enableSegmentation: false,
-                smoothSegmentation: false,
-                refineFaceLandmarks: false,
-                minDetectionConfidence: 0.5,
-                minTrackingConfidence: 0.5
-            });
-            
-            holistic.onResults(onResults);
-            
-            camera = new Camera(videoElement, {
-                onFrame: async () => {
-                    if (!isProcessing) {
+                holistic = new Holistic({ locateFile: (file) => 'https://cdn.jsdelivr.net/npm/@mediapipe/holistic/' + file });
+                holistic.setOptions({
+                    modelComplexity: 0,
+                    selfieMode: true,           // MUST be true: model trained with mirrored landmark coords
+                    smoothLandmarks: true,
+                    enableSegmentation: false,
+                    smoothSegmentation: false,
+                    refineFaceLandmarks: false,
+                    minDetectionConfidence: 0.5,
+                    minTrackingConfidence: 0.5
+                });
+                holistic.onResults(onResults);
+
+                // Request front camera explicitly
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: 'user', width: 320, height: 240 },
+                    audio: false
+                });
+                videoElement.srcObject = stream;
+                await videoElement.play();
+                log('Front camera ready');
+
+                // 10fps frame loop (3 seconds to accumulate 30 frames for FSL classification)
+                async function tick() {
+                    const now = Date.now();
+                    if (!isProcessing && (!window.lastTick || now - window.lastTick > 100)) {
                         isProcessing = true;
-                        try {
-                            await holistic.send({image: videoElement});
-                        } finally {
-                            // Yield back to browser microtask queue to unblock UI thread
-                            setTimeout(() => { isProcessing = false }, 10);
-                        }
+                        window.lastTick = now;
+                        try { await holistic.send({ image: videoElement }); }
+                        catch(e) { log('Send error: ' + e.message); }
+                        finally { isProcessing = false; }
                     }
-                },
-                width: 320,
-                height: 240
-            });
-            
-                camera.start().then(() => log('Camera started successfully')).catch(e => log('Camera start failed: ' + e.message));
-            } catch (err) {
-                log('Init Error: ' + err.toString());
+                    requestAnimationFrame(tick);
+                }
+                tick();
+
+            } catch(e) {
+                log('Init failed: ' + e.toString());
             }
         }
         
@@ -226,9 +188,24 @@ const CameraProcessor = forwardRef<CameraProcessorRef, CameraProcessorProps>(
             <head>
                 <meta name="viewport" content="width=device-width, initial-scale=1.0">
                 <style>
-                    body { margin: 0; overflow: hidden; background: #1a1a1a; }
-                    #input_video { display: none; }
-                    #output_canvas { width: 100%; height: 100%; border: 2px solid cyan; }
+                    body { margin: 0; padding: 0; overflow: hidden; background: #000; position: relative; }
+                    /* selfieMode:true mirrors landmark coords; only the raw video needs CSS flip */
+                    #input_video { 
+                        position: absolute; top: 0; left: 0; 
+                        width: 100vw; height: 100vh; 
+                        object-fit: cover; 
+                        z-index: 1;
+                        transform: scaleX(-1);
+                    }
+                    #output_canvas { 
+                        position: absolute; top: 0; left: 0; 
+                        width: 100vw; height: 100vh; 
+                        object-fit: cover; 
+                        z-index: 2; 
+                        pointer-events: none;
+                        border: none;
+                        /* NO transform — landmark coords already mirrored by selfieMode:true */
+                    }
                 </style>
                 <script>
                     window.onerror = function(msg) {
@@ -239,7 +216,7 @@ const CameraProcessor = forwardRef<CameraProcessorRef, CameraProcessorProps>(
                             window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'log', message: 'HTML Injected successfully!' }));
                         }
                     }, 100);
-                </script>
+                <\/script>
                 ${MEDIAPIPE_SCRIPT}
             </head>
             <body>

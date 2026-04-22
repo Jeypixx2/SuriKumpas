@@ -4,7 +4,7 @@ import { useRouter } from 'expo-router';
 import { MaterialIcons } from '@expo/vector-icons';
 import { TouchableOpacity } from 'react-native';
 import Voice, { SpeechResultsEvent, SpeechErrorEvent } from '@dev-amirzubair/react-native-voice';
-import AvatarViewer from '../../components/AvatarViewer';
+import { useAvatarContext } from '../../lib/AvatarContext';
 import MicButton from '../../components/MicButton';
 import { matchSpeechToLabel, FSLLabel, SequenceItem, tokenizeSentence } from '../../lib/labels';
 
@@ -14,32 +14,12 @@ export default function TranslateScreen() {
     const router = useRouter();
     const [isListening, setIsListening] = useState(false);
     const [recognizedText, setRecognizedText] = useState('');
-    const [signToPlay, setSignToPlay] = useState<string | null>(null);
-    const [letterToPlay, setLetterToPlay] = useState<string | null>(null);
-    const [sequenceToPlay, setSequenceToPlay] = useState<SequenceItem[] | null>(null);
+    const {
+        setSignToPlay, setLetterToPlay, sequenceToPlay, setSequenceToPlay, isAvatarLoaded
+    } = useAvatarContext();
+
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
-    const [isAvatarLoaded, setIsAvatarLoaded] = useState(false);
     const timeoutRef = useRef<NodeJS.Timeout | null>(null);
-
-    const [shouldRenderAvatar, setShouldRenderAvatar] = useState(false);
-
-    useEffect(() => {
-        // Start speech listeners
-        Voice.onSpeechResults = onSpeechResults;
-        Voice.onSpeechError = onSpeechError;
-
-        // Defer rendering the extremely heavy 3D Avatar by 1.5 seconds so that 
-        // the App Startup Splash Screen doesn't freeze and loads instantly!
-        const initTimer = setTimeout(() => {
-            setShouldRenderAvatar(true);
-        }, 1500);
-
-        return () => {
-            Voice.destroy().then(() => Voice.removeAllListeners());
-            if (timeoutRef.current) clearTimeout(timeoutRef.current);
-            clearTimeout(initTimer);
-        };
-    }, []);
 
     const onSpeechResults = useCallback((e: SpeechResultsEvent) => {
         const text = e.value?.[0] || '';
@@ -66,7 +46,7 @@ export default function TranslateScreen() {
                 setErrorMessage(null);
             }, 3000);
         }
-    }, []);
+    }, [setSequenceToPlay, setSignToPlay, setLetterToPlay]);
 
     const onSpeechError = useCallback((e: SpeechErrorEvent) => {
         console.warn('Speech error:', e.error);
@@ -86,6 +66,19 @@ export default function TranslateScreen() {
         timeoutRef.current = setTimeout(() => {
             setErrorMessage(null);
         }, 3000);
+    }, []);
+
+    useEffect(() => {
+        // Re-register listeners every time the callbacks update (avoids stale closures)
+        Voice.onSpeechResults = onSpeechResults;
+        Voice.onSpeechError = onSpeechError;
+    }, [onSpeechResults, onSpeechError]);
+
+    useEffect(() => {
+        return () => {
+            Voice.destroy().then(() => Voice.removeAllListeners());
+            if (timeoutRef.current) clearTimeout(timeoutRef.current);
+        };
     }, []);
 
     const toggleListening = useCallback(async () => {
@@ -132,82 +125,70 @@ export default function TranslateScreen() {
 
     return (
         <View style={styles.container}>
-            <TouchableOpacity
-                style={styles.backButton}
-                onPress={() => router.back()}
-            >
-                <MaterialIcons name="arrow-back" size={28} color="#ffffff" />
-            </TouchableOpacity>
+            <View style={styles.topHalf}>
+                <TouchableOpacity
+                    style={styles.backButton}
+                    onPress={() => router.back()}
+                >
+                    <MaterialIcons name="arrow-back" size={28} color="#ffffff" />
+                </TouchableOpacity>
+            </View>
 
-            <View style={styles.avatarContainer}>
-                <AvatarViewer
-                    style={styles.avatar}
-                    signToPlay={signToPlay}
-                    letterToPlay={letterToPlay}
-                    sequenceToPlay={sequenceToPlay}
-                    onVRMLoaded={() => setIsAvatarLoaded(true)}
-                    onError={(error) => console.error('Avatar error:', error)}
-                />
+            <View style={styles.bottomHalf}>
+                <View style={styles.textContainer}>
+                    {recognizedText ? (
+                        <Text style={styles.recognizedText}>
+                            "{recognizedText}"
+                        </Text>
+                    ) : null}
 
-                {!isAvatarLoaded && (
-                    <View style={styles.loadingOverlay}>
-                        <Text style={styles.loadingText}>Loading 3D Engine...</Text>
-                    </View>
-                )}
+                    {errorMessage ? (
+                        <Text style={styles.errorText}>{errorMessage}</Text>
+                    ) : null}
+
+
+                    {sequenceToPlay && sequenceToPlay.length > 0 && (
+                        <View style={styles.sequenceContainer}>
+                            {sequenceToPlay.slice(0, 5).map((item, index) => (
+                                <View key={index} style={styles.sequenceBadge}>
+                                    <Text style={styles.sequenceText}>
+                                        {item.display}
+                                    </Text>
+                                </View>
+                            ))}
+                            {sequenceToPlay.length > 5 && (
+                                <Text style={styles.moreText}>+{sequenceToPlay.length - 5} more</Text>
+                            )}
+                        </View>
+                    )}
+                </View>
+
+                <View style={styles.micContainer}>
+                    <MicButton
+                        onPress={toggleListening}
+                        isListening={isListening}
+                        size={100}
+                    />
+                    <Text style={styles.micHint}>
+                        {isListening ? 'Listening...' : 'Tap to speak'}
+                    </Text>
+                </View>
 
                 <View style={styles.dotPatternBackground}>
-                    {Array.from({ length: 50 }).map((_, i) => (
+                    {Array.from({ length: 20 }).map((_, i) => (
                         <View
                             key={i}
                             style={[
                                 styles.bgDot,
                                 {
-                                    left: (i % 10) * (width / 10) + 20,
-                                    top: Math.floor(i / 10) * (height / 10) + 50
+                                    // Use absolute numbers similar to detect layout
+                                    left: (i % 5) * 80 + 20,
+                                    top: Math.floor(i / 5) * 80 + 20
                                 }
                             ]}
                         />
                     ))}
                 </View>
-            </View>
-
-            <View style={styles.textContainer}>
-                {recognizedText ? (
-                    <Text style={styles.recognizedText}>
-                        "{recognizedText}"
-                    </Text>
-                ) : null}
-
-                {errorMessage ? (
-                    <Text style={styles.errorText}>{errorMessage}</Text>
-                ) : null}
-
-
-                {sequenceToPlay && sequenceToPlay.length > 0 && (
-                    <View style={styles.sequenceContainer}>
-                        {sequenceToPlay.slice(0, 5).map((item, index) => (
-                            <View key={index} style={styles.sequenceBadge}>
-                                <Text style={styles.sequenceText}>
-                                    {item.display}
-                                </Text>
-                            </View>
-                        ))}
-                        {sequenceToPlay.length > 5 && (
-                            <Text style={styles.moreText}>+{sequenceToPlay.length - 5} more</Text>
-                        )}
-                    </View>
-                )}
-            </View>
-
-            <View style={styles.micContainer}>
-                <MicButton
-                    onPress={toggleListening}
-                    isListening={isListening}
-                    size={100}
-                />
-                <Text style={styles.micHint}>
-                    {isListening ? 'Listening...' : 'Tap to speak'}
-                </Text>
             </View>
         </View>
     );
@@ -216,7 +197,23 @@ export default function TranslateScreen() {
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        backgroundColor: '#0a0a0a',
+        flexDirection: 'column',
+    },
+    topHalf: {
+        height: '50%',
+        width: '100%',
+        position: 'relative',
+        backgroundColor: '#0a0a0a', // Solid dark background to hide any native Tab artifacting!
+    },
+    bottomHalf: {
+        height: '50%',
+        width: '100%',
+        backgroundColor: '#111111',
+        alignItems: 'center',
+        borderTopWidth: 2,
+        borderTopColor: '#00e5ff',
+        position: 'relative',
+        overflow: 'hidden',
     },
     backButton: {
         position: 'absolute',
@@ -230,42 +227,6 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         zIndex: 10,
     },
-    avatarContainer: {
-        position: 'absolute',
-        top: 100,
-        left: 20,
-        right: 20,
-        bottom: 250,
-        borderRadius: 24,
-        overflow: 'hidden',
-        backgroundColor: '#0a0a0a',
-        borderWidth: 2,
-        borderColor: '#00e5ff',
-        shadowColor: '#00e5ff',
-        shadowOffset: { width: 0, height: 0 },
-        shadowOpacity: 0.3,
-        shadowRadius: 30,
-        elevation: 10,
-    },
-    avatar: {
-        flex: 1,
-    },
-    loadingOverlay: {
-        position: 'absolute',
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        backgroundColor: 'rgba(10, 10, 10, 0.8)',
-        justifyContent: 'center',
-        alignItems: 'center',
-        zIndex: 5,
-    },
-    loadingText: {
-        color: '#00e5ff',
-        fontSize: 18,
-        fontWeight: 'bold',
-    },
     dotPatternBackground: {
         position: 'absolute',
         top: 0,
@@ -273,20 +234,22 @@ const styles = StyleSheet.create({
         right: 0,
         bottom: 0,
         pointerEvents: 'none',
+        zIndex: 0,
     },
     bgDot: {
         position: 'absolute',
-        width: 3,
-        height: 3,
-        borderRadius: 1.5,
-        backgroundColor: 'rgba(0, 229, 255, 0.15)',
+        width: 2,
+        height: 2,
+        borderRadius: 1,
+        backgroundColor: 'rgba(0, 229, 255, 0.1)',
     },
     textContainer: {
         position: 'absolute',
-        bottom: 180,
+        top: 30, // Position text near the top of the bottom half
         left: 20,
         right: 20,
         alignItems: 'center',
+        zIndex: 5,
     },
     recognizedText: {
         color: '#ffffff',

@@ -6,7 +6,8 @@ import CameraProcessor, { CameraProcessorRef } from '../../components/CameraProc
 import ResultOverlay from '../../components/ResultOverlay';
 import { SignClassifier } from '../../lib/SignClassifier';
 import { ModelSwitcher } from '../../lib/ModelSwitcher';
-import { getLabelById, FSLLabel, ALPHABET_LABELS } from '../../lib/labels';
+import { getLabelById, FSLLabel, ALPHABET_LABELS, tokenizeSentence } from '../../lib/labels';
+import { useAvatarContext } from '../../lib/AvatarContext';
 
 const { width, height } = Dimensions.get('window');
 
@@ -15,6 +16,7 @@ export default function DetectScreen() {
     const classifierRef = useRef(new SignClassifier());
     const modelSwitcherRef = useRef(new ModelSwitcher());
     const cameraRef = useRef<CameraProcessorRef>(null);
+    const { setSequenceToPlay, setLetterToPlay, setSignToPlay } = useAvatarContext();
 
     const [detectedLabel, setDetectedLabel] = useState<FSLLabel | null>(null);
     const [confidence, setConfidence] = useState(0);
@@ -38,8 +40,9 @@ export default function DetectScreen() {
 
     const handleKeypointsExtracted = useCallback(async (keypoints: Float32Array) => {
         const now = Date.now();
-        if (now - lastDetectionRef.current < 500) return;
+        if (now - lastDetectionRef.current < 400) return;
 
+        // Check if hands are present (hand data starts at index 1536)
         let handsDetected = false;
         const handStartIndex = 1536;
         for (let i = handStartIndex; i < handStartIndex + 126; i++) {
@@ -50,51 +53,76 @@ export default function DetectScreen() {
         }
 
         if (!handsDetected) {
+            // Reset buffer when hands leave frame
+            frameBufferRef.current = [];
+            modelSwitcherRef.current.reset();
             return;
         }
 
         const movementResult = modelSwitcherRef.current.detectMovement(keypoints);
 
         if (movementResult.isMoving) {
+            // --- FSL PATH: accumulate frames while moving ---
             frameBufferRef.current.push(keypoints);
 
+            // Cap buffer at 60 frames to prevent stale data buildup
+            if (frameBufferRef.current.length > 60) {
+                frameBufferRef.current.shift();
+            }
+
             if (frameBufferRef.current.length >= 30) {
-                if (now - lastAttemptRef.current < 150) return; // Cap inference to ~6 FPS
+                if (now - lastAttemptRef.current < 200) return; // Cap FSL inference to ~5 FPS
                 lastAttemptRef.current = now;
 
                 try {
-                    const result = await classifierRef.current.classifyFSL(frameBufferRef.current.slice(-30));
-                    const label = getLabelById(result.labelIndex);
+                    const frames = frameBufferRef.current.slice(-30);
+                    const result = await classifierRef.current.classifyFSL(frames);
 
-                    if (result.confidence > 0.7) {
+                    // Always slide the window forward after inference so we don't re-run on stale data
+                    frameBufferRef.current = frameBufferRef.current.slice(-15);
+
+                    if (result.confidence > 0.6) {
+                        const label = getLabelById(result.labelIndex);
                         setDetectedLabel(label);
                         setConfidence(result.confidence);
                         setShowResult(true);
-                        
+
                         cameraRef.current?.speak(label.filipino, 'fil-PH');
-                        
+
+                        // 🎬 Trigger avatar animation for the detected FSL sign
+                        const sequence = tokenizeSentence(label.english);
+                        if (sequence.length > 0) {
+                            setSequenceToPlay(sequence);
+                            setSignToPlay(null);
+                            setLetterToPlay(null);
+                        }
+
                         lastDetectionRef.current = now;
-                        frameBufferRef.current = [];
+                        frameBufferRef.current = []; // Clear after a successful detection
+                        modelSwitcherRef.current.reset();
 
                         setTimeout(() => setShowResult(false), 3000);
                     }
                 } catch (error) {
-                    console.error('Classification error:', error);
-                }
-                
-                if (frameBufferRef.current.length >= 30) {
-                    frameBufferRef.current.shift(); // Remove oldest frame instead of discarding all
+                    console.error('FSL classification error:', error);
+                    // On error, slide the window so we don't loop on a broken state
+                    frameBufferRef.current = frameBufferRef.current.slice(-15);
                 }
             }
         } else if (movementResult.confidence >= 1.0) {
-            if (now - lastAttemptRef.current < 200) return; // Cap Alphabet inference to 5 FPS
+            // --- ALPHABET PATH: hand has been still for long enough ---
+            // Guard: do NOT fire alphabet within 1 second of an FSL detection
+            if (now - lastDetectionRef.current < 1000) return;
+
+            if (now - lastAttemptRef.current < 300) return; // Cap alphabet inference to ~3 FPS
             lastAttemptRef.current = now;
 
             try {
                 const result = await classifierRef.current.classifyAlphabet(keypoints);
                 const letter = ALPHABET_LABELS[result.letterIndex];
 
-                if (result.confidence > 0.6 && letter) {
+                // Higher threshold (0.75) to avoid false positives like "O"
+                if (result.confidence > 0.75 && letter) {
                     const label: FSLLabel = {
                         id: 200 + result.letterIndex,
                         english: letter,
@@ -104,9 +132,14 @@ export default function DetectScreen() {
                     setDetectedLabel(label);
                     setConfidence(result.confidence);
                     setShowResult(true);
-                    
+
                     cameraRef.current?.speak(letter, 'fil-PH');
-                    
+
+                    // 🎬 Trigger avatar fingerspelling animation for the detected letter
+                    setLetterToPlay(letter);
+                    setSignToPlay(null);
+                    setSequenceToPlay(null);
+
                     lastDetectionRef.current = now;
 
                     setTimeout(() => setShowResult(false), 3000);
@@ -116,6 +149,7 @@ export default function DetectScreen() {
             }
         }
     }, []);
+
 
     return (
         <View style={styles.container}>

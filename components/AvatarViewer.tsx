@@ -109,6 +109,7 @@ interface AvatarViewerProps {
     letterToPlay?: string | null;
     sequenceToPlay?: SequenceItem[] | null;
     avatarUri?: string;
+    onSequenceEnd?: () => void;
 }
 
 export default function AvatarViewer({
@@ -118,6 +119,7 @@ export default function AvatarViewer({
     signToPlay,
     letterToPlay,
     sequenceToPlay,
+    onSequenceEnd,
     avatarUri = './avatar.vrm'
 }: AvatarViewerProps) {
     const glRef = useRef<ExpoWebGLRenderingContext | null>(null);
@@ -154,9 +156,10 @@ export default function AvatarViewer({
                 return info;
             };
 
-            const renderer = new Renderer({ gl });
+            // The alpha parameter ensures the WebGL context is transparent
+            const renderer = new Renderer({ gl, alpha: true } as any);
             renderer.setSize(gl.drawingBufferWidth, gl.drawingBufferHeight);
-            renderer.setClearColor(0x0a0a0a, 1.0);
+            renderer.setClearColor(0x000000, 0); // Transparent WebGL background!
             renderer.outputColorSpace = THREE.SRGBColorSpace;
             rendererRef.current = renderer;
 
@@ -169,8 +172,8 @@ export default function AvatarViewer({
                 0.01,
                 100
             );
-            camera.position.set(0, 1.0, 2.2); // Zoomed out farther so hands stay in frame
-            camera.lookAt(0, 1.0, 0); // Looking at the chest level
+            camera.position.set(0, 1.2, 1.6); // Zoomed in to frame a perfect half-body shot
+            camera.lookAt(0, 1.2, 0); // Focus on the upper chest
             cameraRef.current = camera;
 
             const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
@@ -257,6 +260,10 @@ export default function AvatarViewer({
             scene.add(vrm.scene);
 
             const animator = new AvatarAnimator();
+            animator.setOnSequenceEnd(() => {
+                console.log('[AvatarViewer] Sequence finished, notifying parent...');
+                if (onSequenceEnd) onSequenceEnd();
+            });
             animator.setVRM(vrm);
             animatorRef.current = animator;
 
@@ -285,7 +292,9 @@ export default function AvatarViewer({
             { keyword: 'GOOD NIGHT', file: require('../assets/good_night.glb') },
             { keyword: 'MAGANDANG UMAGA', file: require('../assets/good_morning.glb') },
             { keyword: 'MAGANDANG GABI', file: require('../assets/good_evening.glb') },
-
+            { keyword: 'HELLO', file: require('../assets/hello.glb') },
+            { keyword: 'HOW ARE YOU', file: require('../assets/how_are_you.glb') },
+            { keyword: 'KUMUSTA KA', file: require('../assets/how_are_you.glb') },
         ];
 
         console.log(`[Avatar] Background-loading ${customAnimations.length} GLB animations...`);
@@ -315,6 +324,7 @@ export default function AvatarViewer({
             }
         }
         console.log('[Avatar] All background GLB animations loaded!');
+        animator.markCustomAnimationsLoaded();
     };
 
     useEffect(() => {
