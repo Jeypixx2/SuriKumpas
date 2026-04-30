@@ -65,7 +65,7 @@ export const FSL_LABELS: FSLLabel[] = [
     { id: 56, english: "GRANDFATHER", filipino: "LOLO", category: "FAMILY" },
     { id: 57, english: "GRANDMOTHER", filipino: "LOLA", category: "FAMILY" },
     { id: 58, english: "UNCLE", filipino: "TIYO", category: "FAMILY" },
-    { id: 59, english: "AUNTIE", filipino: "TIYA", category: "FAMILY" },
+    { id: 59, english: "AUNTIE", filipino: "TITA", category: "FAMILY" },
     { id: 60, english: "COUSIN", filipino: "PINSAN", category: "FAMILY" },
     { id: 61, english: "PARENTS", filipino: "MAGULANG", category: "FAMILY" },
     { id: 62, english: "BOY", filipino: "LALAKI", category: "RELATIONSHIPS" },

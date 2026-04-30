@@ -5,7 +5,7 @@ import { WebView } from 'react-native-webview';
 import * as FileSystem from 'expo-file-system/legacy';
 
 interface CameraProcessorProps {
-    onKeypointsExtracted?: (keypoints: Float32Array) => void;
+    onKeypointsExtracted?: (keypoints: Float32Array | 'no-hands') => void;
     style?: any;
 }
 
@@ -52,28 +52,29 @@ const MEDIAPIPE_SCRIPT = `
         function extractKeypoints(results) {
             const kp = [];
             
-            // Pose: 33 * 4 = 132 values
+            // === MUST match extractKeypoints.ts and SignClassifier.ts order exactly ===
+            // 1. Pose: 33 * 4 = 132 values
             const pose = results.poseLandmarks || [];
             for (let i = 0; i < 33; i++) {
                 if (i < pose.length) { const lm = pose[i]; kp.push(r(lm.x), r(lm.y), r(lm.z), r(lm.visibility || 1)); }
                 else { kp.push(0, 0, 0, 0); }
             }
-            
-            // Face: 468 * 3 = 1404 values — model was trained with this, MUST include real data
+
+            // 2. Face: 468 * 3 = 1404 values
             const face = results.faceLandmarks || [];
             for (let i = 0; i < 468; i++) {
                 if (i < face.length) { const lm = face[i]; kp.push(r(lm.x), r(lm.y), r(lm.z)); }
                 else { kp.push(0, 0, 0); }
             }
             
-            // Left hand: 21 * 3 = 63 values
+            // 3. Left hand: 21 * 3 = 63 values
             const lh = results.leftHandLandmarks || [];
             for (let i = 0; i < 21; i++) {
                 if (i < lh.length) { const lm = lh[i]; kp.push(r(lm.x), r(lm.y), r(lm.z)); }
                 else { kp.push(0, 0, 0); }
             }
             
-            // Right hand: 21 * 3 = 63 values
+            // 4. Right hand: 21 * 3 = 63 values
             const rh = results.rightHandLandmarks || [];
             for (let i = 0; i < 21; i++) {
                 if (i < rh.length) { const lm = rh[i]; kp.push(r(lm.x), r(lm.y), r(lm.z)); }
@@ -101,7 +102,11 @@ const MEDIAPIPE_SCRIPT = `
 
             const lh = results.leftHandLandmarks || [];
             const rh = results.rightHandLandmarks || [];
-            if (lh.length === 0 && rh.length === 0) return;
+            
+            if (lh.length === 0 && rh.length === 0) {
+                window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'no-hands' }));
+                return;
+            }
             
             window.ReactNativeWebView.postMessage(JSON.stringify({
                 type: 'keypoints',
@@ -119,7 +124,7 @@ const MEDIAPIPE_SCRIPT = `
                 holistic = new Holistic({ locateFile: (file) => 'https://cdn.jsdelivr.net/npm/@mediapipe/holistic/' + file });
                 holistic.setOptions({
                     modelComplexity: 0,
-                    selfieMode: true,           // MUST be true: model trained with mirrored landmark coords
+                    selfieMode: false,          // Align landmarks with mirrored display via CSS instead
                     smoothLandmarks: true,
                     enableSegmentation: false,
                     smoothSegmentation: false,
@@ -138,10 +143,10 @@ const MEDIAPIPE_SCRIPT = `
                 await videoElement.play();
                 log('Front camera ready');
 
-                // 10fps frame loop (3 seconds to accumulate 30 frames for FSL classification)
+                // 15fps frame loop (approx 1.3 seconds to accumulate 20 frames for FSL classification)
                 async function tick() {
                     const now = Date.now();
-                    if (!isProcessing && (!window.lastTick || now - window.lastTick > 100)) {
+                    if (!isProcessing && (!window.lastTick || now - window.lastTick > 66)) {
                         isProcessing = true;
                         window.lastTick = now;
                         try { await holistic.send({ image: videoElement }); }
@@ -204,7 +209,8 @@ const CameraProcessor = forwardRef<CameraProcessorRef, CameraProcessorProps>(
                         z-index: 2; 
                         pointer-events: none;
                         border: none;
-                        /* NO transform — landmark coords already mirrored by selfieMode:true */
+                        /* Mirror canvas to match mirrored video display */
+                        transform: scaleX(-1);
                     }
                 </style>
                 <script>
@@ -230,8 +236,11 @@ const CameraProcessor = forwardRef<CameraProcessorRef, CameraProcessorProps>(
             try {
                 const message = JSON.parse(event.nativeEvent.data);
                 if (message.type === 'keypoints') {
+                    if (Math.random() < 0.05) console.log(`[CameraProcessor] Received keypoints, length: ${message.data.length}`);
                     const keypoints = new Float32Array(message.data);
                     onKeypointsExtracted?.(keypoints);
+                } else if (message.type === 'no-hands') {
+                    onKeypointsExtracted?.('no-hands');
                 } else if (message.type === 'log') {
                     console.log('[WebView DOM]', message.message);
                 }

@@ -5,8 +5,20 @@ interface HolisticResults {
     rightHandLandmarks?: { x: number; y: number; z: number }[];
 }
 
+/**
+ * Standard MediaPipe Holistic keypoint extraction order:
+ *   Pose:       33 landmarks × 4 (x,y,z,visibility) = 132
+ *   Face:      468 landmarks × 3 (x,y,z)            = 1404
+ *   Left Hand:  21 landmarks × 3 (x,y,z)            = 63
+ *   Right Hand: 21 landmarks × 3 (x,y,z)            = 63
+ *   TOTAL = 1662
+ *
+ * This must exactly match the order used in the Python training script.
+ */
 export function extractKeypoints(results: HolisticResults): Float32Array {
     const keypoints: number[] = [];
+
+    // Order: Pose (33*4), Face (468*3), Left Hand (21*3), Right Hand (21*3) = 1662 total
 
     const poseLandmarks = results.poseLandmarks || [];
     for (let i = 0; i < 33; i++) {
@@ -54,6 +66,6 @@ export function extractKeypoints(results: HolisticResults): Float32Array {
 export function areHandsPresent(results: HolisticResults): { left: boolean; right: boolean } {
     return {
         left: !!results.leftHandLandmarks && results.leftHandLandmarks.length > 0,
-        right: !!results.rightHandLandmarks && results.rightHandLandmarks.length > 0
+        right: !!results.rightHandLandmarks && results.rightHandLandmarks.length > 0,
     };
 }

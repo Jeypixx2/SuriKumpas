@@ -1,28 +1,33 @@
-const HAND_START_INDEX = 468 * 3 + 33 * 4;
-const HAND_END_INDEX = HAND_START_INDEX + 21 * 3 + 21 * 3;
+// Aligned with Pose-Face-LH-RH order:
+// Pose: 0..131, Face: 132..1535, LH: 1536..1598, RH: 1599..1661
+const LH_START = 1536;
+const LH_END   = 1599;
+const RH_START = 1599;
+const RH_END   = 1662;
 
 export class ModelSwitcher {
     private previousHandKeypoints: number[] | null = null;
-    private movementThreshold: number = 0.02;
+    private movementThreshold: number = 0.003; // More sensitive
     private stillFrameCount: number = 0;
     private movingFrameCount: number = 0;
-    private readonly stillThreshold = 10;
-    private readonly movingThreshold = 2;
+    private readonly stillThreshold = 3; // Faster transition
+    private readonly movingThreshold = 2; // Faster transition
 
-    detectMovement(keypoints: Float32Array): { isMoving: boolean; confidence: number } {
-        const currentHandKeypoints = this.extractHandKeypoints(keypoints);
+    detectMovement(currentKeypoints: Float32Array): { isMoving: boolean; confidence: number } {
+        // Extract hand keypoints from both hands
+        const currentHands: number[] = [];
+        for (let i = LH_START; i < LH_END; i++) currentHands.push(currentKeypoints[i]);
+        for (let i = RH_START; i < RH_END; i++) currentHands.push(currentKeypoints[i]);
 
         if (!this.previousHandKeypoints) {
-            this.previousHandKeypoints = Array.from(currentHandKeypoints);
+            this.previousHandKeypoints = currentHands;
             return { isMoving: false, confidence: 0 };
         }
 
-        const movement = this.calculateMovement(currentHandKeypoints, this.previousHandKeypoints);
-        this.previousHandKeypoints = Array.from(currentHandKeypoints);
+        const movement = this.calculateMovement(this.previousHandKeypoints, currentHands);
+        this.previousHandKeypoints = currentHands;
 
-        const isMoving = movement > this.movementThreshold;
-
-        if (isMoving) {
+        if (movement > this.movementThreshold) {
             this.movingFrameCount++;
             this.stillFrameCount = 0;
         } else {
@@ -30,31 +35,35 @@ export class ModelSwitcher {
             this.movingFrameCount = 0;
         }
 
-        const movingConfidence = Math.min(this.movingFrameCount / this.movingThreshold, 1.0);
-        const stillConfidence = Math.min(this.stillFrameCount / this.stillThreshold, 1.0);
+        const isMoving = this.movingFrameCount >= this.movingThreshold;
+        const isStill = this.stillFrameCount >= this.stillThreshold;
 
-        return {
-            isMoving: movingConfidence >= 1.0,
-            confidence: isMoving ? movingConfidence : stillConfidence
-        };
+        // Confidence: 1.0 = Still, 0.0 = Moving
+        let confidence = 0.5;
+        if (isStill) confidence = 1.0;
+        if (isMoving) confidence = 0.0;
+
+        return { isMoving, confidence };
     }
 
-    private extractHandKeypoints(keypoints: Float32Array): Float32Array {
-        return keypoints.slice(HAND_START_INDEX, HAND_END_INDEX);
-    }
+    private calculateMovement(prev: number[], curr: number[]): number {
+        let totalDiff = 0;
+        let count = 0;
 
-    private calculateMovement(current: Float32Array, previous: number[]): number {
-        let totalMovement = 0;
-        const length = Math.min(current.length, previous.length);
-
-        for (let i = 0; i < length; i++) {
-            totalMovement += Math.abs(current[i] - previous[i]);
+        for (let i = 0; i < prev.length; i += 3) {
+            // Only compare if the landmark is detected (not 0,0,0)
+            if (prev[i] !== 0 && curr[i] !== 0) {
+                const dx = prev[i] - curr[i];
+                const dy = prev[i+1] - curr[i+1];
+                totalDiff += Math.sqrt(dx*dx + dy*dy);
+                count++;
+            }
         }
 
-        return totalMovement / length;
+        return count > 0 ? totalDiff / count : 0;
     }
 
-    reset(): void {
+    reset() {
         this.previousHandKeypoints = null;
         this.stillFrameCount = 0;
         this.movingFrameCount = 0;

@@ -295,6 +295,8 @@ export default function AvatarViewer({
             { keyword: 'HELLO', file: require('../assets/hello.glb') },
             { keyword: 'HOW ARE YOU', file: require('../assets/how_are_you.glb') },
             { keyword: 'KUMUSTA KA', file: require('../assets/how_are_you.glb') },
+            { keyword: 'AUNTIE', file: require('../assets/auntie.glb') },
+            { keyword: 'TITA', file: require('../assets/auntie.glb') },
         ];
 
         console.log(`[Avatar] Background-loading ${customAnimations.length} GLB animations...`);
