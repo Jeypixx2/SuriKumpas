@@ -7,8 +7,8 @@ export interface FSLLabel {
 
 export const FSL_LABELS: FSLLabel[] = [
     { id: 0, english: "GOOD MORNING", filipino: "MAGANDANG UMAGA", category: "GREETING" },
-    { id: 1, english: "GOOD AFTERNOON", filipino: "MAGANDANG HAPON", category: "GREETING" },
-    { id: 2, english: "GOOD EVENING", filipino: "MAGANDANG GABI", category: "GREETING" },
+    { id: 1, english: "GOOD EVENING", filipino: "MAGANDANG GABI", category: "GREETING" },
+    { id: 2, english: "GOOD NIGHT", filipino: "MAGANDANG GABI POH", category: "GREETING" },
     { id: 3, english: "HELLO", filipino: "HALO", category: "GREETING" },
     { id: 4, english: "HOW ARE YOU", filipino: "KUMUSTA KA", category: "GREETING" },
     { id: 5, english: "IM FINE", filipino: "MABUTI", category: "GREETING" },
@@ -106,13 +106,11 @@ export const FSL_LABELS: FSLLabel[] = [
     { id: 97, english: "JUICE", filipino: "INUMIN", category: "DRINK" },
     { id: 98, english: "MILK", filipino: "GATAS", category: "DRINK" },
     { id: 99, english: "COFFEE", filipino: "KAPE", category: "DRINK" },
-    { id: 100, english: "TEA", filipino: "TSAA", category: "DRINK" },
-    { id: 101, english: "BEER", filipino: "BIRA", category: "DRINK" },
-    { id: 102, english: "WINE", filipino: "ALAK", category: "DRINK" },
-    { id: 103, english: "SUGAR", filipino: "ASUKAL", category: "DRINK" },
-    { id: 104, english: "NO SUGAR", filipino: "WALANG ASUKAL", category: "DRINK" },
-    { id: 105, english: "GOOD NIGHT", filipino: "MAGANDANG GABI POH", category: "GREETING" },
-    { id: 106, english: "GOODBYE", filipino: "PAALAM", category: "GREETING" },
+    { id: 100, "english": "TEA", filipino: "TSAA", category: "DRINK" },
+    { id: 101, "english": "BEER", filipino: "BIRA", category: "DRINK" },
+    { id: 102, "english": "WINE", filipino: "ALAK", category: "DRINK" },
+    { id: 103, "english": "SUGAR", filipino: "ASUKAL", category: "DRINK" },
+    { id: 104, "english": "NO SUGAR", filipino: "WALANG ASUKAL", category: "DRINK" },
 ];
 
 export interface SequenceItem {

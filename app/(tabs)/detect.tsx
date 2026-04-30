@@ -134,15 +134,17 @@ export default function DetectScreen() {
                     setDebugInfo(`${movStr} | FSL: ${label.english} (${(result.confidence * 100).toFixed(0)}%)`);
                     setStatus(`Natukoy: ${label.filipino} (${(result.confidence * 100).toFixed(0)}%)`);
  
-                    if (result.confidence > 0.12) { // "Close match" logic: 12% is often enough for unique signs
-                        // Push to history for stability
+                    if (result.confidence > 0.80) { 
+                        // Push to history for stability (Temporal Filter)
                         predictionHistoryRef.current.push(label.english);
-                        if (predictionHistoryRef.current.length > 3) predictionHistoryRef.current.shift();
+                        if (predictionHistoryRef.current.length > 2) predictionHistoryRef.current.shift();
 
-                        // Only trigger if it's consistent or very high confidence
-                        const isConsistent = predictionHistoryRef.current.filter(x => x === label.english).length >= 2;
+                        // Only 'confirm' a sign if the same class is predicted for 2 consecutive windows
+                        const isConsistent = predictionHistoryRef.current.length === 2 && 
+                                             predictionHistoryRef.current[0] === label.english &&
+                                             predictionHistoryRef.current[1] === label.english;
                         
-                        if (isConsistent || result.confidence > 0.6) {
+                        if (isConsistent) {
                             setDetectedLabel(label);
                             setConfidence(result.confidence);
                             setShowResult(true);
