@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
-import { StyleSheet, View, Text, TouchableOpacity } from 'react-native';
+import { StyleSheet, View, Text, TouchableOpacity, Alert } from 'react-native';
 import { useRouter } from 'expo-router';
 import { MaterialIcons } from '@expo/vector-icons';
 import CameraProcessor, { CameraProcessorRef } from '../../components/CameraProcessor';
@@ -34,6 +34,7 @@ export default function DetectScreen() {
     const frameBufferRef = useRef<Float32Array[]>([]);
     const predictionHistoryRef = useRef<string[]>([]); // Rolling buffer for stability
     const lastDetectionRef = useRef<number>(0);
+    const isProcessingRef = useRef<boolean>(false);
     const lastAttemptRef = useRef<number>(0);
  
     useEffect(() => {
@@ -42,9 +43,10 @@ export default function DetectScreen() {
                 await classifierRef.current.loadFSLModel();
                 await classifierRef.current.loadAlphabetModel();
                 setStatus('Handa na. Itapat ang kamay.');
-            } catch (error) {
+            } catch (error: any) {
                 console.error('Error loading models:', error);
                 setStatus('Error sa pagload ng model.');
+                Alert.alert('Model Load Error', error.message || String(error));
             }
         };
         loadModels();
@@ -53,8 +55,11 @@ export default function DetectScreen() {
     const handleKeypointsExtracted = useCallback(async (keypoints: Float32Array | 'no-hands') => {
         if (keypoints === 'no-hands') {
             setStatus('Walang kamay na nakita.');
-            setDebugInfo('');
-            frameBufferRef.current = [];
+            
+            // CRITICAL: Pad buffer with 0s to maintain sequence timing instead of clearing it
+            frameBufferRef.current.push(new Float32Array(1662));
+            if (frameBufferRef.current.length > 30) frameBufferRef.current.shift();
+            
             predictionHistoryRef.current = [];
             modelSwitcherRef.current.reset();
             return;
@@ -77,9 +82,11 @@ export default function DetectScreen() {
  
         if (!handsDetected) {
             setStatus('Walang kamay na nakita.');
-            setDebugInfo('');
-            frameBufferRef.current = [];
-            predictionHistoryRef.current = [];
+            
+            // CRITICAL: Pad buffer with 0s to maintain sequence timing
+            frameBufferRef.current.push(new Float32Array(1662));
+            if (frameBufferRef.current.length > 30) frameBufferRef.current.shift();
+            
             modelSwitcherRef.current.reset();
             return;
         }
@@ -111,62 +118,28 @@ export default function DetectScreen() {
                 if (processedKeypoints[i] !== 0) processedKeypoints[i] = 1.0 - processedKeypoints[i];
             }
 
-            // IMPORTANT: Swapping LH and RH data might be needed if the model expects 
-            // a specific hand, but usually the Alphabet model checks both.
+            // IMPORTANT: Swapping LH and RH data because flipping X turns a left hand into a right hand
+            const tempLH = processedKeypoints.slice(1536, 1599);
+            const tempRH = processedKeypoints.slice(1599, 1662);
+            processedKeypoints.set(tempRH, 1536);
+            processedKeypoints.set(tempLH, 1599);
         }
+
+        // UNCONDITIONALLY maintain 30 frame window for temporal consistency
+        frameBufferRef.current.push(processedKeypoints);
+        if (frameBufferRef.current.length > 30) frameBufferRef.current.shift();
 
         const movStr = `Mov:${movementResult.confidence.toFixed(2)}`;
  
-        if (movementResult.isMoving) {
-            setStatus('Kumukumpas...');
-            frameBufferRef.current.push(processedKeypoints);
-            // Maintain 30 frame window
-            if (frameBufferRef.current.length > 30) frameBufferRef.current.shift();
- 
-            if (frameBufferRef.current.length === 30) {
-                if (now - lastAttemptRef.current < 80) return;
-                lastAttemptRef.current = now;
- 
-                try {
-                    const result = await classifierRef.current.classifyFSL(frameBufferRef.current);
-                    const label = getLabelById(result.labelIndex);
-                    
-                    setDebugInfo(`${movStr} | FSL: ${label.english} (${(result.confidence * 100).toFixed(0)}%)`);
-                    setStatus(`Natukoy: ${label.filipino} (${(result.confidence * 100).toFixed(0)}%)`);
- 
-                    if (result.confidence > 0.80) { 
-                        // Push to history for stability (Temporal Filter)
-                        predictionHistoryRef.current.push(label.english);
-                        if (predictionHistoryRef.current.length > 2) predictionHistoryRef.current.shift();
+        // Prevent concurrent TFLite inferences which cause native crashes
+        if (isProcessingRef.current) return;
+        isProcessingRef.current = true;
 
-                        // Only 'confirm' a sign if the same class is predicted for 2 consecutive windows
-                        const isConsistent = predictionHistoryRef.current.length === 2 && 
-                                             predictionHistoryRef.current[0] === label.english &&
-                                             predictionHistoryRef.current[1] === label.english;
-                        
-                        if (isConsistent) {
-                            setDetectedLabel(label);
-                            setConfidence(result.confidence);
-                            setShowResult(true);
-                            cameraRef.current?.speak(label.filipino, 'fil-PH');
-                            
-                            const sequence = tokenizeSentence(label.english);
-                            if (sequence.length > 0) setSequenceToPlay(sequence);
-    
-                            lastDetectionRef.current = now;
-                            frameBufferRef.current = [];
-                            predictionHistoryRef.current = [];
-                            modelSwitcherRef.current.reset();
-                            setTimeout(() => setShowResult(false), 2000);
-                        }
-                    }
-                } catch (e) {}
-            }
-        } else if (movementResult.confidence >= 1.0) {
+        try {
+            // If the hand is completely still, run the Alphabet model
+            if (movementResult.confidence >= 1.0) {
             setStatus('Sinusuri ang letra...');
-            if (now - lastAttemptRef.current < 150) return;
-            lastAttemptRef.current = now;
- 
+            
             try {
                 const result = await classifierRef.current.classifyAlphabet(processedKeypoints);
                 const letter = ALPHABET_LABELS[result.letterIndex];
@@ -194,11 +167,63 @@ export default function DetectScreen() {
                         predictionHistoryRef.current = [];
                         setTimeout(() => setShowResult(false), 2000);
                     }
+                } else {
+                    predictionHistoryRef.current = [];
                 }
-            } catch (e) {}
+            } catch (e: any) {
+                console.error("Alphabet Error:", e);
+                setDebugInfo("Alphabet Err: " + (e.message || String(e)));
+            }
         } else {
-            setStatus('I-steady ang kamay para sa letra.');
-            setDebugInfo(movStr);
+            // Hand is moving or transitioning, run the FSL model
+                setStatus('Kumukumpas...');
+                
+                if (frameBufferRef.current.length === 30) {
+                    try {
+                        const result = await classifierRef.current.classifyFSL(frameBufferRef.current);
+                        const label = getLabelById(result.labelIndex);
+                        
+                        setDebugInfo(`${movStr} | FSL: ${label.english} (${(result.confidence * 100).toFixed(0)}%)`);
+     
+                        // Lowered threshold to 0.40 to ensure signs trigger reliably
+                        if (result.confidence > 0.40) { 
+                            setStatus(`Natukoy: ${label.filipino} (${(result.confidence * 100).toFixed(0)}%)`);
+                            
+                            predictionHistoryRef.current.push(label.english);
+                            if (predictionHistoryRef.current.length > 2) predictionHistoryRef.current.shift();
+     
+                            // Require 2 consecutive frames of the exact same prediction
+                            const isConsistent = predictionHistoryRef.current.length === 2 && 
+                                                 predictionHistoryRef.current[0] === label.english &&
+                                                 predictionHistoryRef.current[1] === label.english;
+                            
+                            if (isConsistent) {
+                                setDetectedLabel(label);
+                                setConfidence(result.confidence);
+                                setShowResult(true);
+                                cameraRef.current?.speak(label.filipino, 'fil-PH');
+                                
+                                const sequence = tokenizeSentence(label.english);
+                                if (sequence.length > 0) setSequenceToPlay(sequence);
+        
+                                lastDetectionRef.current = now;
+                                frameBufferRef.current = [];
+                                predictionHistoryRef.current = [];
+                                modelSwitcherRef.current.reset();
+                                setTimeout(() => setShowResult(false), 2000);
+                            }
+                        } else {
+                            // Break the consistency chain if confidence drops
+                            predictionHistoryRef.current = [];
+                        }
+                    } catch (e: any) {
+                        console.error("FSL Error:", e);
+                        setDebugInfo("FSL Err: " + (e.message || String(e)));
+                    }
+                }
+            }
+        } finally {
+            isProcessingRef.current = false;
         }
     }, [isMirrored, setLetterToPlay, setSequenceToPlay]);
 
