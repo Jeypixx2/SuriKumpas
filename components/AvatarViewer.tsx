@@ -172,8 +172,8 @@ export default function AvatarViewer({
                 0.01,
                 100
             );
-            camera.position.set(0, 1.2, 1.6); // Zoomed in to frame a perfect half-body shot
-            camera.lookAt(0, 1.2, 0); // Focus on the upper chest
+            camera.position.set(0, 1.35, 1.4); // Zoomed in closer to make signs bigger
+            camera.lookAt(0, 1.35, 0); // Focus on the upper chest
             cameraRef.current = camera;
 
             const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);

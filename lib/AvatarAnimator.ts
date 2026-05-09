@@ -240,6 +240,8 @@ export class AvatarAnimator {
         const humanoid = (this.vrm as any).humanoid;
         const spine = humanoid.getBoneNode?.('spine') || humanoid.humanBones?.spine?.node;
         const chest = humanoid.getBoneNode?.('chest') || humanoid.humanBones?.chest?.node;
+        const leftUpperArm = humanoid.getBoneNode?.('leftUpperArm') || humanoid.humanBones?.leftUpperArm?.node;
+        const rightUpperArm = humanoid.getBoneNode?.('rightUpperArm') || humanoid.humanBones?.rightUpperArm?.node;
 
         const times = [0, 1.5, 3];
         const spineValues: number[] = [];
@@ -264,6 +266,24 @@ export class AvatarAnimator {
                 chest.name + '.quaternion',
                 times,
                 chestValues
+            ));
+        }
+
+        // Arms down (A-pose) for idle
+        if (leftUpperArm) {
+            const qLeft = new THREE.Quaternion().setFromEuler(new THREE.Euler(0.1, 0, -1.2));
+            tracks.push(new THREE.QuaternionKeyframeTrack(
+                leftUpperArm.name + '.quaternion',
+                [0, 3],
+                [qLeft.x, qLeft.y, qLeft.z, qLeft.w, qLeft.x, qLeft.y, qLeft.z, qLeft.w]
+            ));
+        }
+        if (rightUpperArm) {
+            const qRight = new THREE.Quaternion().setFromEuler(new THREE.Euler(0.1, 0, 1.2));
+            tracks.push(new THREE.QuaternionKeyframeTrack(
+                rightUpperArm.name + '.quaternion',
+                [0, 3],
+                [qRight.x, qRight.y, qRight.z, qRight.w, qRight.x, qRight.y, qRight.z, qRight.w]
             ));
         }
 
