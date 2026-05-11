@@ -1,4 +1,4 @@
-import { StyleSheet, Text, View, ScrollView, TouchableOpacity } from 'react-native';
+import { StyleSheet, Text, View, ScrollView, TouchableOpacity, Image } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { FSL_LABELS, FSLLabel } from '../../lib/labels';
@@ -93,9 +93,7 @@ export default function HomeScreen() {
     return (
         <View style={styles.container}>
             <View style={styles.header}>
-                <View style={styles.logoSmall}>
-                    <Text style={styles.logoTextSmall}>S</Text>
-                </View>
+                <Image source={require('../../assets/adaptive-icon.png')} style={styles.logoSmall} resizeMode="contain" />
                 <Text style={styles.title}>SuriKumpas</Text>
             </View>
 
@@ -192,15 +190,8 @@ const styles = StyleSheet.create({
         width: 40,
         height: 40,
         borderRadius: 20,
-        backgroundColor: '#00e5ff',
-        alignItems: 'center',
-        justifyContent: 'center',
+        overflow: 'hidden',
         marginRight: 12,
-    },
-    logoTextSmall: {
-        fontSize: 24,
-        fontWeight: 'bold',
-        color: '#0a0a0a',
     },
     title: {
         fontSize: 28,

@@ -81,6 +81,95 @@ export class AvatarAnimator {
         console.log(`[AvatarAnimator] Custom animation imported for: ${signName}`);
     }
 
+    setCustomLetterAnimation(letter: string, clip: THREE.AnimationClip): void {
+        clip.name = letter;
+        this.retargetClip(clip);
+        this.injectThumbOverride(clip, letter.toUpperCase());
+        this.letterAnimations.set(letter.toUpperCase(), clip);
+        console.log(`[AvatarAnimator] Custom letter animation imported for: ${letter}`);
+    }
+
+    /**
+     * Injects a corrective thumb keyframe track directly into the clip.
+     * Because DeepMotion's thumb bone local axes differ from VRM's, the thumb
+     * doesn't close to the palm correctly just from remapping bone names.
+     * This method adds/replaces the rightThumbProximal rotation track with a
+     * known-good "tucked" or "extended" pose per FSL letter — no Blender editing needed.
+     */
+    private injectThumbOverride(clip: THREE.AnimationClip, letter: string): void {
+        if (!this.vrm) return;
+        const humanoid = (this.vrm as any).humanoid;
+        // MUST match retargetClip's lookup — getRawBoneNode is needed for VRM 1.0
+        const get = (name: string) =>
+            humanoid.getBoneNode?.(name) ||
+            humanoid.getRawBoneNode?.(name) ||
+            humanoid.humanBones?.[name]?.node;
+
+        const thumbProxR = get('rightThumbProximal');
+        const thumbDistR = get('rightThumbDistal');
+        if (!thumbProxR) {
+            console.warn('[AvatarAnimator] injectThumbOverride: rightThumbProximal bone not found — thumb override skipped.');
+            return;
+        }
+        console.log(`[AvatarAnimator] injectThumbOverride: found proximal=${thumbProxR.name} distal=${thumbDistR?.name}`);
+
+
+        // ── Per-letter thumb position table ─────────────────────────────────────────
+        // 'tucked'   → thumb folded flat across the palm (B, M, N, S, E, A, T, etc.)
+        // 'neutral'  → natural rest (slightly out) — trust the GLB as-is
+        // 'extended' → thumb pointing up/out (L, Y, etc.)
+        type ThumbPose = 'tucked' | 'neutral' | 'extended';
+        const thumbPoseMap: Record<string, ThumbPose> = {
+            A: 'tucked', B: 'tucked', C: 'neutral', D: 'neutral',
+            E: 'tucked', F: 'neutral', G: 'neutral', H: 'tucked',
+            I: 'neutral', J: 'neutral', K: 'neutral', L: 'extended',
+            M: 'tucked', N: 'tucked', O: 'neutral', P: 'neutral',
+            Q: 'neutral', R: 'neutral', S: 'tucked', T: 'tucked',
+            U: 'neutral', V: 'neutral', W: 'neutral', X: 'neutral',
+            Y: 'extended', Z: 'neutral',
+        };
+
+        const pose: ThumbPose = thumbPoseMap[letter] ?? 'neutral';
+        if (pose === 'neutral') return; // let the GLB data drive it as-is
+
+        // Build the target quaternion for the thumb proximal bone
+        // These Euler values were chosen for VRM's thumb rest orientation.
+        // Adjust X/Y/Z angles here if you need fine-tuning per letter.
+        let thumbQ: THREE.Quaternion;
+        if (pose === 'tucked') {
+            // Rotate thumb inward toward palm: ~55° on X, ~30° on Z
+            thumbQ = new THREE.Quaternion().setFromEuler(new THREE.Euler(0.95, 0.0, 0.52));
+        } else {
+            // Extended: rotate thumb upward/outward
+            thumbQ = new THREE.Quaternion().setFromEuler(new THREE.Euler(-0.3, 0.0, -0.4));
+        }
+
+        // Remove any existing track for this bone and replace with our override
+        const removeTrack = (boneName: string, node: THREE.Object3D) => {
+            clip.tracks = clip.tracks.filter(t => t.name !== `${node.name}.quaternion`);
+        };
+        removeTrack('rightThumbProximal', thumbProxR);
+
+        const duration = clip.duration;
+        const times = [0, duration];
+        const vals = [thumbQ.x, thumbQ.y, thumbQ.z, thumbQ.w,
+                      thumbQ.x, thumbQ.y, thumbQ.z, thumbQ.w];
+        clip.tracks.push(new THREE.QuaternionKeyframeTrack(
+            `${thumbProxR.name}.quaternion`, times, vals
+        ));
+
+        // Also curl the distal joint slightly for a more natural tuck
+        if (thumbDistR && pose === 'tucked') {
+            const distQ = new THREE.Quaternion().setFromEuler(new THREE.Euler(0.6, 0, 0));
+            clip.tracks = clip.tracks.filter(t => t.name !== `${thumbDistR.name}.quaternion`);
+            clip.tracks.push(new THREE.QuaternionKeyframeTrack(
+                `${thumbDistR.name}.quaternion`, times,
+                [distQ.x, distQ.y, distQ.z, distQ.w, distQ.x, distQ.y, distQ.z, distQ.w]
+            ));
+        }
+    }
+
+
     /** Called by AvatarViewer after all GLBs have finished background-loading. */
     markCustomAnimationsLoaded(): void {
         this.customAnimationsLoaded = true;
@@ -109,8 +198,8 @@ export class AvatarAnimator {
             'l_forearm_JNT': 'leftLowerArm',
             'l_hand_JNT': 'leftHand',
             'l_handThumb1_JNT': 'leftThumbProximal',
-            'l_handThumb2_JNT': 'leftThumbDistal',
-            'l_handThumb3_JNT': '', // Ignore tip joint
+            'l_handThumb2_JNT': 'leftThumbIntermediate', // static in DeepMotion export, keeps rest pose
+            'l_handThumb3_JNT': 'leftThumbDistal',       // only animated curl joint — drives main thumb bend
             'l_handIndex1_JNT': 'leftIndexProximal',
             'l_handIndex2_JNT': 'leftIndexIntermediate',
             'l_handIndex3_JNT': 'leftIndexDistal',
@@ -128,8 +217,8 @@ export class AvatarAnimator {
             'r_forearm_JNT': 'rightLowerArm',
             'r_hand_JNT': 'rightHand',
             'r_handThumb1_JNT': 'rightThumbProximal',
-            'r_handThumb2_JNT': 'rightThumbDistal',
-            'r_handThumb3_JNT': '', // Ignore tip joint
+            'r_handThumb2_JNT': 'rightThumbIntermediate', // static in DeepMotion export, keeps rest pose
+            'r_handThumb3_JNT': 'rightThumbDistal',       // only animated curl joint — drives main thumb bend
             'r_handIndex1_JNT': 'rightIndexProximal',
             'r_handIndex2_JNT': 'rightIndexIntermediate',
             'r_handIndex3_JNT': 'rightIndexDistal',
@@ -207,6 +296,8 @@ export class AvatarAnimator {
         };
 
         const tracksToKeep: THREE.KeyframeTrack[] = [];
+        const unmappedNodes = new Set<string>();
+        const mappedBones: string[] = [];
 
         clip.tracks.forEach(track => {
             const trackParts = track.name.split('.');
@@ -216,24 +307,83 @@ export class AvatarAnimator {
             // 1. Is this node known in our map?
             let vrmBoneName = boneMap[nodeName];
 
+            // 🚀 BONE DEFORMATION FIX: Blender exports position/scale tracks for all bones.
+            const isHips = (vrmBoneName === 'hips') || (!vrmBoneName && nodeName.toLowerCase().includes('hip'));
+            if ((propertyName === 'position' || propertyName === 'scale') && !isHips) {
+                return; // skip to prevent deformation
+            }
+
             if (vrmBoneName) {
                 const humanoid = (this.vrm as any).humanoid;
                 const humanBone = humanoid.getBoneNode?.(vrmBoneName) || humanoid.getRawBoneNode?.(vrmBoneName) || humanoid.humanBones?.[vrmBoneName]?.node;
-                
+
                 if (humanBone) {
-                    // Update track name to the actual unique Three.js node name of the VRM bone
                     track.name = `${humanBone.name}.${propertyName}`;
                     tracksToKeep.push(track);
+                    if (propertyName === 'quaternion') {
+                        mappedBones.push(`${nodeName} → ${vrmBoneName}`);
+                    }
                 }
             } else {
-                // Fallback: If it's already a valid name or unknown, keep it for safety
-                tracksToKeep.push(track);
+                // Node not in bone map — log it for diagnosis
+                if (propertyName === 'quaternion') {
+                    unmappedNodes.add(nodeName);
+                }
+                // Drop unknown tracks: keeping them does nothing since VRM has no matching bone
             }
         });
 
+        // 🔍 DIAGNOSTIC: print unmatched bones so we can identify the correct thumb name
+        if (unmappedNodes.size > 0) {
+            console.warn(`[AvatarAnimator] "${clip.name}" UNMATCHED bones:`, [...unmappedNodes].join(', '));
+        }
+        const thumbMapped = mappedBones.filter(b => b.toLowerCase().includes('thumb'));
+        console.log(`[AvatarAnimator] "${clip.name}" thumb tracks: ${thumbMapped.length > 0 ? thumbMapped.join(', ') : 'NONE — bone name mismatch!'}`);
+
         clip.tracks = tracksToKeep;
+
+        // Apply wrist orientation correction so the palm faces naturally forward for signing
+        this.normalizeHandOrientation(clip);
     }
 
+    /**
+     * Corrects wrist bone rotations after retargeting.
+     *
+     * DeepMotion/Blender exports the wrist (hand) bone with the palm facing inward
+     * relative to the VRM rest pose. A small yaw correction per side opens the palm
+     * slightly toward the camera for a more natural signing presentation.
+     *
+     * Runs once per clip at load time — zero runtime overhead.
+     */
+    private normalizeHandOrientation(clip: THREE.AnimationClip): void {
+        if (!this.vrm) return;
+        const humanoid = (this.vrm as any).humanoid;
+        const get = (name: string) => humanoid.getBoneNode?.(name) || humanoid.humanBones?.[name]?.node;
+
+        /** Apply a corrective quaternion (premultiplied in parent-space) to every keyframe of a bone track. */
+        const applyCorrection = (boneName: string, correction: THREE.Quaternion): void => {
+            const boneNode = get(boneName);
+            if (!boneNode) return;
+            const track = clip.tracks.find(t => t.name === `${boneNode.name}.quaternion`) as THREE.QuaternionKeyframeTrack | undefined;
+            if (!track) return;
+            const v = track.values;
+            for (let i = 0; i < v.length; i += 4) {
+                const q = new THREE.Quaternion(v[i], v[i + 1], v[i + 2], v[i + 3]);
+                q.premultiply(correction);
+                v[i] = q.x; v[i + 1] = q.y; v[i + 2] = q.z; v[i + 3] = q.w;
+            }
+        };
+
+        // ─── Wrist orientation ────────────────────────────────────────────────────────
+        // Rotate each palm ~15° outward (yaw) so it faces the camera more naturally.
+        applyCorrection('leftHand',  new THREE.Quaternion().setFromEuler(new THREE.Euler(0,  0.26, 0)));
+        applyCorrection('rightHand', new THREE.Quaternion().setFromEuler(new THREE.Euler(0, -0.26, 0)));
+
+        // NOTE: Thumb bones are intentionally NOT corrected here.
+        // The correct bone mapping (Thumb1→Proximal, Thumb2→Intermediate, Thumb3→Distal)
+        // already passes the right rotation data to the right joints. Any additional axis
+        // correction on top of the correct mapping makes the thumb worse, not better.
+    }
     private generateIdleAnimation(): void {
         if (!this.vrm) return;
 
@@ -652,18 +802,22 @@ export class AvatarAnimator {
         
         // 🚀 BONE RESET: If we are transitioning from a fingerspelling letter (curled fingers) 
         // to a sign that might not have finger tracks, we MUST ensure the bones reset.
-        this.resetFingers(); 
+        this.resetFingers();
+
+        // Letters crossfade quickly so the sequence feels fluid; signs get a longer blend.
+        const isLetter = nextItem.type === 'letter';
+        const crossFadeDuration = isLetter ? 0.08 : 0.25;
 
         if (this.currentSignAction) {
             nextAction.reset().play();
-            nextAction.crossFadeFrom(this.currentSignAction, 0.15, true);
+            nextAction.crossFadeFrom(this.currentSignAction, crossFadeDuration, true);
         } else {
             // If starting fresh, fade out idle and any other lingering actions
             this.mixer.stopAllAction(); // Heavy reset to clear any "stuck" finger weights
             if (this.idleAction) {
                 this.idleAction.reset().play();
                 nextAction.reset().play();
-                nextAction.crossFadeFrom(this.idleAction, 0.15, true);
+                nextAction.crossFadeFrom(this.idleAction, crossFadeDuration, true);
             } else {
                 nextAction.reset().play();
             }
@@ -672,10 +826,14 @@ export class AvatarAnimator {
         this.currentSignAction = nextAction;
         this.isPlayingSign = true;
 
-        const delay = (clip.duration * 1000) + 150;
+        // For letters, hold the pose briefly so it's readable, then move to the next.
+        // For signs, play full duration with a small buffer.
+        const holdMs = isLetter
+            ? Math.max(clip.duration * 1000, 600) + 80   // min 600 ms per letter so it's readable
+            : clip.duration * 1000 + 200;
         setTimeout(() => {
             this.processNextInQueue(id);
-        }, delay);
+        }, holdMs);
     }
 
     playSignAnimation(signName: string): void {

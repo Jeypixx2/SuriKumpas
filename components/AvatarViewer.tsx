@@ -267,16 +267,16 @@ export default function AvatarViewer({
             animator.setVRM(vrm);
             animatorRef.current = animator;
 
-            // 🚀 Avatar is visible NOW — notify the UI immediately!
-            console.log('[Avatar] VRM loaded. Notifying UI...');
+            // 🚀 Show the avatar IMMEDIATELY — don't wait for GLBs
+            console.log('[Avatar] VRM loaded. Showing avatar instantly...');
             onVRMLoaded?.();
 
-            // Play any outstanding animation requests
+            // Play any outstanding animation requests (pendingSequence will queue them if GLBs aren't ready yet)
             if (sequenceToPlay && sequenceToPlay.length > 0) animator.playSequence(sequenceToPlay);
             else if (signToPlay) animator.playSignAnimation(signToPlay);
             else if (letterToPlay) animator.playLetterAnimation(letterToPlay);
 
-            // ⬇️ Load GLB animations quietly in the background AFTER avatar is shown
+            // ⬇️ Load GLBs quietly in the background — pendingSequence handles any requests made before they finish
             loadCustomAnimations(animator);
 
         } catch (error) {
@@ -297,11 +297,43 @@ export default function AvatarViewer({
             { keyword: 'KUMUSTA KA', file: require('../assets/how_are_you.glb') },
             { keyword: 'AUNTIE', file: require('../assets/auntie.glb') },
             { keyword: 'TITA', file: require('../assets/auntie.glb') },
+            { keyword: 'IM FINE', file: require('../assets/im_fine.glb') },
+            { keyword: "I'M FINE", file: require('../assets/im_fine.glb') },
+            { keyword: 'MABUTI', file: require('../assets/im_fine.glb') },
         ];
 
-        console.log(`[Avatar] Background-loading ${customAnimations.length} GLB animations...`);
+        const customLetters = [
+            { keyword: 'A', file: require('../assets/a.glb') },
+            { keyword: 'B', file: require('../assets/b.glb') },
+            { keyword: 'C', file: require('../assets/c.glb') },
+            { keyword: 'D', file: require('../assets/d.glb') },
+            { keyword: 'E', file: require('../assets/e.glb') },
+            { keyword: 'F', file: require('../assets/f.glb') },
+            { keyword: 'G', file: require('../assets/g.glb') },
+            { keyword: 'H', file: require('../assets/h.glb') },
+            { keyword: 'I', file: require('../assets/i.glb') },
+            { keyword: 'J', file: require('../assets/j.glb') },
+            { keyword: 'K', file: require('../assets/k.glb') },
+            { keyword: 'L', file: require('../assets/l.glb') },
+            { keyword: 'M', file: require('../assets/m.glb') },
+            { keyword: 'N', file: require('../assets/n.glb') },
+            { keyword: 'O', file: require('../assets/o.glb') },
+            { keyword: 'P', file: require('../assets/p.glb') },
+            { keyword: 'Q', file: require('../assets/q.glb') },
+            { keyword: 'R', file: require('../assets/r.glb') },
+            { keyword: 'S', file: require('../assets/s.glb') },
+            { keyword: 'T', file: require('../assets/t.glb') },
+            { keyword: 'U', file: require('../assets/u.glb') },
+            { keyword: 'V', file: require('../assets/v.glb') },
+            { keyword: 'W', file: require('../assets/w.glb') },
+            { keyword: 'X', file: require('../assets/x.glb') },
+            { keyword: 'Y', file: require('../assets/y.glb') },
+            { keyword: 'Z', file: require('../assets/z.glb') },
+        ];
 
-        for (const anim of customAnimations) {
+        console.log(`[Avatar] Background-loading ${customAnimations.length} sign GLBs and ${customLetters.length} letter GLBs...`);
+
+        const loadItem = async (anim: { keyword: string, file: any }, isLetter: boolean) => {
             try {
                 const glbAsset = await Asset.fromModule(anim.file).downloadAsync();
                 const glbUri = glbAsset.localUri || glbAsset.uri;
@@ -318,13 +350,25 @@ export default function AvatarViewer({
                     if (extGLTF.animations && extGLTF.animations.length > 0) {
                         const clip = extGLTF.animations[0];
                         console.log(`[Avatar] BG loaded: [${anim.keyword}] Tracks: ${clip.tracks.length}`);
-                        animator.setCustomSignAnimation(anim.keyword, clip);
+                        if (isLetter) {
+                            animator.setCustomLetterAnimation(anim.keyword, clip);
+                        } else {
+                            animator.setCustomSignAnimation(anim.keyword, clip);
+                        }
                     }
                 }
             } catch (err) {
                 console.warn(`[Avatar] BG load failed for ${anim.keyword}:`, err);
             }
+        };
+
+        for (const anim of customAnimations) {
+            await loadItem(anim, false);
         }
+        for (const letter of customLetters) {
+            await loadItem(letter, true);
+        }
+
         console.log('[Avatar] All background GLB animations loaded!');
         animator.markCustomAnimationsLoaded();
     };

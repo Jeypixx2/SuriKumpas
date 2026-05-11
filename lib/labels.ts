@@ -12,7 +12,7 @@ export const FSL_LABELS: FSLLabel[] = [
     { id: 3, english: "HELLO", filipino: "HALO", category: "GREETING" },
     { id: 4, english: "HOW ARE YOU", filipino: "KUMUSTA KA", category: "GREETING" },
     { id: 5, english: "IM FINE", filipino: "MABUTI", category: "GREETING" },
-    { id: 6, english: "NICE TO MEET YOU", filipino: "KINAGAGALAK KITA", category: "GREETING" },
+    { id: 6, english: "NICE TO MEET YOU", filipino: "MASAYA AKONG MAKILALA KA", category: "GREETING" },
     { id: 7, english: "THANK YOU", filipino: "SALAMAT", category: "GREETING" },
     { id: 8, english: "YOURE WELCOME", filipino: "WALANG ANUMAN", category: "GREETING" },
     { id: 9, english: "SEE YOU TOMORROW", filipino: "KITA TAYO BUKAS", category: "GREETING" },
@@ -164,7 +164,7 @@ export function tokenizeSentence(sentence: string): SequenceItem[] {
             if (i + lookAhead >= words.length) continue;
 
             const candidatePhrase = words.slice(i, i + lookAhead + 1).join(' ');
-            
+
             // Check against both english and filipino labels
             const label = FSL_LABELS.find(l =>
                 l.english === candidatePhrase ||
@@ -177,7 +177,7 @@ export function tokenizeSentence(sentence: string): SequenceItem[] {
                     value: label.english,
                     display: candidatePhrase
                 });
-                i += lookAhead; 
+                i += lookAhead;
                 matched = true;
                 break;
             }
