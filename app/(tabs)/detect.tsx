@@ -1,6 +1,7 @@
-import React, { useState, useCallback, useRef, useEffect } from 'react';
+import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { StyleSheet, View, Text, TouchableOpacity, Alert } from 'react-native';
 import { useRouter } from 'expo-router';
+import { useIsFocused } from '@react-navigation/native';
 import { MaterialIcons } from '@expo/vector-icons';
 import CameraProcessor, { CameraProcessorRef } from '../../components/CameraProcessor';
 import ResultOverlay from '../../components/ResultOverlay';
@@ -22,6 +23,7 @@ export default function DetectScreen() {
     const classifierRef = useRef(new SignClassifier());
     const modelSwitcherRef = useRef(new ModelSwitcher());
     const cameraRef = useRef<CameraProcessorRef>(null);
+    const isFocused = useIsFocused();
     const { setSequenceToPlay, setLetterToPlay, setSignToPlay } = useAvatarContext();
 
     const [detectedLabel, setDetectedLabel] = useState<FSLLabel | null>(null);
@@ -38,6 +40,14 @@ export default function DetectScreen() {
     const lastAttemptRef = useRef<number>(0);
  
     useEffect(() => {
+        if (!isFocused) {
+            frameBufferRef.current = [];
+            predictionHistoryRef.current = [];
+            modelSwitcherRef.current.reset();
+        }
+    }, [isFocused]);
+
+    useEffect(() => {
         const loadModels = async () => {
             try {
                 await classifierRef.current.loadFSLModel();
@@ -53,6 +63,7 @@ export default function DetectScreen() {
     }, []);
  
     const handleKeypointsExtracted = useCallback(async (keypoints: Float32Array | 'no-hands') => {
+        if (!isFocused) return;
         if (keypoints === 'no-hands') {
             setStatus('Walang kamay na nakita.');
             
@@ -94,36 +105,31 @@ export default function DetectScreen() {
         const movementResult = modelSwitcherRef.current.detectMovement(keypoints);
         
         // APPLY MIRRORING FIX IF NEEDED
-        let processedKeypoints = keypoints;
+        // We modify keypoints in-place to avoid allocations (it's a fresh copy from the WebView bridge anyway)
         if (!isMirrored) {
-            processedKeypoints = new Float32Array(keypoints);
-            
-            // 1. Flip Pose (0..131, 4 values per landmark: x, y, z, v)
+            // Combine all loops into one for better performance
+            // 1. Pose (0..131)
             for (let i = 0; i < 132; i += 4) {
-                if (processedKeypoints[i] !== 0) processedKeypoints[i] = 1.0 - processedKeypoints[i];
+                if (keypoints[i] !== 0) keypoints[i] = 1.0 - keypoints[i];
             }
-            
-            // 2. Flip Face (132..1535, 3 values per landmark: x, y, z)
+            // 2. Face (132..1535)
             for (let i = 132; i < 1536; i += 3) {
-                if (processedKeypoints[i] !== 0) processedKeypoints[i] = 1.0 - processedKeypoints[i];
+                if (keypoints[i] !== 0) keypoints[i] = 1.0 - keypoints[i];
             }
-            
-            // 3. Flip Left Hand (1536..1598, 3 values per landmark: x, y, z)
-            for (let i = 1536; i < 1599; i += 3) {
-                if (processedKeypoints[i] !== 0) processedKeypoints[i] = 1.0 - processedKeypoints[i];
-            }
-
-            // 4. Flip Right Hand (1599..1661, 3 values per landmark: x, y, z)
-            for (let i = 1599; i < 1662; i += 3) {
-                if (processedKeypoints[i] !== 0) processedKeypoints[i] = 1.0 - processedKeypoints[i];
+            // 3. Hands (1536..1661)
+            for (let i = 1536; i < 1662; i += 3) {
+                if (keypoints[i] !== 0) keypoints[i] = 1.0 - keypoints[i];
             }
 
             // IMPORTANT: Swapping LH and RH data because flipping X turns a left hand into a right hand
-            const tempLH = processedKeypoints.slice(1536, 1599);
-            const tempRH = processedKeypoints.slice(1599, 1662);
-            processedKeypoints.set(tempRH, 1536);
-            processedKeypoints.set(tempLH, 1599);
+            // We use a small temporary buffer for the swap
+            const tempLH = keypoints.slice(1536, 1599);
+            const tempRH = keypoints.slice(1599, 1662);
+            keypoints.set(tempRH, 1536);
+            keypoints.set(tempLH, 1599);
         }
+
+        const processedKeypoints = keypoints;
 
         // UNCONDITIONALLY maintain 30 frame window for temporal consistency
         frameBufferRef.current.push(processedKeypoints);
@@ -225,7 +231,7 @@ export default function DetectScreen() {
         } finally {
             isProcessingRef.current = false;
         }
-    }, [isMirrored, setLetterToPlay, setSequenceToPlay]);
+    }, [isMirrored, setLetterToPlay, setSequenceToPlay, isFocused]);
 
     return (
         <View style={styles.container}>
@@ -234,6 +240,7 @@ export default function DetectScreen() {
                     ref={cameraRef}
                     style={styles.camera}
                     onKeypointsExtracted={handleKeypointsExtracted}
+                    active={isFocused}
                 />
                 <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
                     <MaterialIcons name="arrow-back" size={28} color="#ffffff" />
@@ -246,9 +253,9 @@ export default function DetectScreen() {
                 <ResultOverlay label={detectedLabel} confidence={confidence} visible={showResult} />
                 
                 <View style={styles.dotPattern}>
-                    {Array.from({ length: 15 }).map((_, i) => (
+                    {useMemo(() => Array.from({ length: 15 }).map((_, i) => (
                         <View key={i} style={[styles.dot, { left: (i % 5) * 80 + 40, top: Math.floor(i / 5) * 80 + 40 }]} />
-                    ))}
+                    )), [])}
                 </View>
 
                 <TouchableOpacity 

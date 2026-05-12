@@ -1,5 +1,8 @@
-import React from 'react';
-import { StyleSheet, View, Text, ActivityIndicator, Image } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { StyleSheet, View, Text, ActivityIndicator, Image, Animated, Dimensions } from 'react-native';
+
+const { width } = Dimensions.get('window');
+const SLIDE_WIDTH = width - 60; // 30 padding on each side
 
 interface LoadingStep {
     label: string;
@@ -13,6 +16,33 @@ interface LoadingScreenProps {
 }
 
 export default function LoadingScreen({ steps, currentStep, appName = 'SuriKumpas' }: LoadingScreenProps) {
+    const [activeSlide, setActiveSlide] = useState(0);
+    const scrollX = useRef(new Animated.Value(0)).current;
+
+    const slides = [
+        { type: 'text', title: 'How to use:' },
+        { type: 'image', source: require('../assets/home.jpg'), title: 'Home Dashboard' },
+        { type: 'image', source: require('../assets/detect.jpg'), title: 'Sign Detection' },
+        { type: 'image', source: require('../assets/translate.jpg'), title: 'Speech to Sign' },
+    ];
+
+    useEffect(() => {
+        const timer = setInterval(() => {
+            setActiveSlide((prev) => (prev + 1) % slides.length);
+        }, 2500);
+
+        return () => clearInterval(timer);
+    }, []);
+
+    useEffect(() => {
+        Animated.spring(scrollX, {
+            toValue: -activeSlide * SLIDE_WIDTH,
+            useNativeDriver: true,
+            friction: 8,
+            tension: 40
+        }).start();
+    }, [activeSlide]);
+
     const getStepIcon = (status: LoadingStep['status']) => {
         switch (status) {
             case 'complete':
@@ -47,19 +77,42 @@ export default function LoadingScreen({ steps, currentStep, appName = 'SuriKumpa
                 <Text style={styles.tagline}>Filipino Sign Language Recognition</Text>
             </View>
 
-            <View style={styles.instructionsContainer}>
-                <Text style={styles.instructionTitle}>How to use:</Text>
-                <View style={styles.instructionItem}>
-                    <Text style={styles.instructionBullet}>•</Text>
-                    <Text style={styles.instructionText}>Sign to Text: Ensure your upper body and hands are visible to the camera.</Text>
-                </View>
-                <View style={styles.instructionItem}>
-                    <Text style={styles.instructionBullet}>•</Text>
-                    <Text style={styles.instructionText}>Speech to Sign: Press the microphone button and speak to see the 3D avatar translate.</Text>
-                </View>
-                <View style={styles.instructionItem}>
-                    <Text style={styles.instructionBullet}>•</Text>
-                    <Text style={styles.instructionText}>Positioning: Place your phone on a stable surface for the best experience.</Text>
+            <View style={styles.sliderWrapper}>
+                <Animated.View style={[styles.sliderContent, { transform: [{ translateX: scrollX }] }]}>
+                    {slides.map((slide, index) => (
+                        <View key={index} style={styles.slide}>
+                            {slide.type === 'text' ? (
+                                <View style={styles.instructionsContainer}>
+                                    <Text style={styles.instructionTitle}>{slide.title}</Text>
+                                    <View style={styles.instructionItem}>
+                                        <Text style={styles.instructionBullet}>•</Text>
+                                        <Text style={styles.instructionText}>Sign to Text: Ensure hands are visible to the camera.</Text>
+                                    </View>
+                                    <View style={styles.instructionItem}>
+                                        <Text style={styles.instructionBullet}>•</Text>
+                                        <Text style={styles.instructionText}>Speech to Sign: Press Mic and speak to translate.</Text>
+                                    </View>
+                                    <View style={styles.instructionItem}>
+                                        <Text style={styles.instructionBullet}>•</Text>
+                                        <Text style={styles.instructionText}>Positioning: Use a stable surface for best results.</Text>
+                                    </View>
+                                </View>
+                            ) : (
+                                <View style={styles.imageSlideContainer}>
+                                    <Image source={slide.source} style={styles.slideImage} resizeMode="contain" />
+                                    <View style={styles.imageOverlay}>
+                                        <Text style={styles.imageTitle}>{slide.title}</Text>
+                                    </View>
+                                </View>
+                            )}
+                        </View>
+                    ))}
+                </Animated.View>
+                
+                <View style={styles.pagination}>
+                    {slides.map((_, i) => (
+                        <View key={i} style={[styles.dot, activeSlide === i && styles.dotActive]} />
+                    ))}
                 </View>
             </View>
 
@@ -133,14 +186,76 @@ const styles = StyleSheet.create({
         color: '#888888',
         textAlign: 'center',
     },
-    instructionsContainer: {
-        width: '100%',
-        backgroundColor: 'rgba(0, 229, 255, 0.05)',
-        padding: 16,
-        borderRadius: 12,
-        borderWidth: 1,
-        borderColor: 'rgba(0, 229, 255, 0.2)',
+    sliderWrapper: {
+        width: SLIDE_WIDTH,
+        height: 280,
+        overflow: 'hidden',
         marginBottom: 30,
+        borderRadius: 16,
+        backgroundColor: '#000',
+        borderWidth: 2,
+        borderColor: 'rgba(0, 229, 255, 0.3)',
+    },
+    sliderContent: {
+        flexDirection: 'row',
+        width: SLIDE_WIDTH * 4,
+    },
+    slide: {
+        width: SLIDE_WIDTH,
+        height: 280,
+        justifyContent: 'center',
+    },
+    imageSlideContainer: {
+        width: '100%',
+        height: '100%',
+        position: 'relative',
+        backgroundColor: '#000',
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    slideImage: {
+        width: '100%',
+        height: '100%',
+    },
+    imageOverlay: {
+        position: 'absolute',
+        top: 10,
+        right: 10,
+        backgroundColor: 'rgba(0, 229, 255, 0.2)',
+        paddingHorizontal: 12,
+        paddingVertical: 4,
+        borderRadius: 20,
+        borderWidth: 1,
+        borderColor: 'rgba(0, 229, 255, 0.5)',
+    },
+    imageTitle: {
+        color: '#00e5ff',
+        fontSize: 11,
+        fontWeight: 'bold',
+        textTransform: 'uppercase',
+        letterSpacing: 1,
+    },
+    pagination: {
+        position: 'absolute',
+        bottom: 10,
+        left: 0,
+        right: 0,
+        flexDirection: 'row',
+        justifyContent: 'center',
+        gap: 6,
+    },
+    dot: {
+        width: 6,
+        height: 6,
+        borderRadius: 3,
+        backgroundColor: 'rgba(255, 255, 255, 0.3)',
+    },
+    dotActive: {
+        backgroundColor: '#00e5ff',
+        width: 12,
+    },
+    instructionsContainer: {
+        padding: 16,
     },
     instructionTitle: {
         color: '#00e5ff',

@@ -19,6 +19,7 @@ export default function HomeScreen() {
     const router = useRouter();
     const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
     const [isLoading, setIsLoading] = useState(true);
+    const [hasError, setHasError] = useState(false);
     const [currentStep, setCurrentStep] = useState(0);
     const [steps, setSteps] = useState<LoadingStep[]>([
         { label: 'Loading FSL Model...', status: 'pending' },
@@ -28,35 +29,39 @@ export default function HomeScreen() {
 
     const classifierRef = useRef(new SignClassifier());
 
+    const loadAll = async () => {
+        setHasError(false);
+        setIsLoading(true);
+        try {
+            updateStep(0, 'loading');
+            await classifierRef.current.loadFSLModel();
+            updateStep(0, 'complete');
+            setCurrentStep(1);
+
+            await new Promise(resolve => setTimeout(resolve, 300));
+
+            updateStep(1, 'loading');
+            await classifierRef.current.loadAlphabetModel();
+            updateStep(1, 'complete');
+            setCurrentStep(2);
+
+            await new Promise(resolve => setTimeout(resolve, 300));
+
+            updateStep(2, 'loading');
+            // This is artificial, but we'll keep it for the feel
+            await new Promise(resolve => setTimeout(resolve, 1500));
+            updateStep(2, 'complete');
+
+            await new Promise(resolve => setTimeout(resolve, 500));
+            setIsLoading(false);
+        } catch (error) {
+            console.error('Loading error:', error);
+            updateStep(currentStep, 'error');
+            setHasError(true);
+        }
+    };
+
     useEffect(() => {
-        const loadAll = async () => {
-            try {
-                updateStep(0, 'loading');
-                await classifierRef.current.loadFSLModel();
-                updateStep(0, 'complete');
-                setCurrentStep(1);
-
-                await new Promise(resolve => setTimeout(resolve, 300));
-
-                updateStep(1, 'loading');
-                await classifierRef.current.loadAlphabetModel();
-                updateStep(1, 'complete');
-                setCurrentStep(2);
-
-                await new Promise(resolve => setTimeout(resolve, 300));
-
-                updateStep(2, 'loading');
-                await new Promise(resolve => setTimeout(resolve, 1500));
-                updateStep(2, 'complete');
-
-                await new Promise(resolve => setTimeout(resolve, 500));
-                setIsLoading(false);
-            } catch (error) {
-                console.error('Loading error:', error);
-                updateStep(currentStep, 'error');
-            }
-        };
-
         loadAll();
     }, []);
 
@@ -86,6 +91,16 @@ export default function HomeScreen() {
         return (
             <View style={styles.container}>
                 <LoadingScreen steps={steps} currentStep={currentStep} />
+                {hasError && (
+                    <View style={styles.errorRecoveryContainer}>
+                        <TouchableOpacity style={styles.retryButton} onPress={loadAll}>
+                            <Text style={styles.retryButtonText}>Retry Loading</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity style={styles.proceedButton} onPress={() => setIsLoading(false)}>
+                            <Text style={styles.proceedButtonText}>Proceed Anyway</Text>
+                        </TouchableOpacity>
+                    </View>
+                )}
             </View>
         );
     }
@@ -308,5 +323,37 @@ const styles = StyleSheet.create({
         color: '#888888',
         fontSize: 14,
         marginTop: 2,
+    },
+    errorRecoveryContainer: {
+        position: 'absolute',
+        bottom: 50,
+        left: 30,
+        right: 30,
+        flexDirection: 'row',
+        gap: 10,
+    },
+    retryButton: {
+        flex: 1,
+        backgroundColor: '#00e5ff',
+        padding: 15,
+        borderRadius: 12,
+        alignItems: 'center',
+    },
+    retryButtonText: {
+        color: '#0a0a0a',
+        fontWeight: 'bold',
+    },
+    proceedButton: {
+        flex: 1,
+        backgroundColor: 'rgba(255, 255, 255, 0.1)',
+        padding: 15,
+        borderRadius: 12,
+        borderWidth: 1,
+        borderColor: 'rgba(255, 255, 255, 0.2)',
+        alignItems: 'center',
+    },
+    proceedButtonText: {
+        color: '#ffffff',
+        fontWeight: '600',
     },
 });

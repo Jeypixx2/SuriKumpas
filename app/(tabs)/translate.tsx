@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { StyleSheet, View, Text, Dimensions } from 'react-native';
 import { useRouter } from 'expo-router';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -175,7 +175,7 @@ export default function TranslateScreen() {
                 </View>
 
                 <View style={styles.dotPatternBackground}>
-                    {Array.from({ length: 20 }).map((_, i) => (
+                    {useMemo(() => Array.from({ length: 20 }).map((_, i) => (
                         <View
                             key={i}
                             style={[
@@ -187,7 +187,7 @@ export default function TranslateScreen() {
                                 }
                             ]}
                         />
-                    ))}
+                    )), [])}
                 </View>
             </View>
         </View>

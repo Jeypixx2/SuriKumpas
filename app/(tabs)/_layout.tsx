@@ -1,3 +1,4 @@
+import React, { useMemo } from 'react';
 import { Tabs, useSegments } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { View, Text, StyleSheet } from 'react-native';
@@ -14,13 +15,26 @@ function GlobalAvatar() {
     isAvatarLoaded, setIsAvatarLoaded 
   } = useAvatarContext();
 
-  // If not on translate screen, hide the avatar perfectly.
-  // It is rendered OUTSIDE Tabs so Expo GL won't destroy it when switching tabs!
+  const dots = useMemo(() => {
+    return Array.from({ length: 50 }).map((_, i) => (
+      <View
+          key={i}
+          style={[
+              styles.bgDot,
+              {
+                  left: (i % 10) * 40 + 20,
+                  top: Math.floor(i / 10) * 80 + 50
+              }
+          ]}
+      />
+    ));
+  }, []);
+
   return (
     <View style={[
       styles.avatarContainer,
       {
-        top: isTranslate ? 0 : -9999, // Do NOT use opacity: 0, it corrupts Android SurfaceView into a white block!
+        top: isTranslate ? 0 : -9999,
         pointerEvents: isTranslate ? 'auto' : 'none',
       }
     ]}>
@@ -31,6 +45,7 @@ function GlobalAvatar() {
         sequenceToPlay={sequenceToPlay}
         onVRMLoaded={() => setIsAvatarLoaded(true)}
         onError={(error) => console.error('Avatar error:', error)}
+        active={isTranslate}
         onSequenceEnd={() => {
           setSequenceToPlay(null);
           setSignToPlay(null);
@@ -39,20 +54,7 @@ function GlobalAvatar() {
       />
 
       <View style={styles.dotPatternBackground}>
-         {Array.from({ length: 50 }).map((_, i) => (
-             <View
-                 key={i}
-                 style={[
-                     styles.bgDot,
-                     {
-                         // Using hardcoded pixel values from a typical 400x800 screen ratio
-                         // width is around 380-400, height is around 800
-                         left: (i % 10) * 40 + 20,
-                         top: Math.floor(i / 10) * 80 + 50
-                     }
-                 ]}
-             />
-         ))}
+         {dots}
       </View>
 
       {!isAvatarLoaded && (
@@ -73,7 +75,7 @@ export default function TabLayout() {
             headerShown: false, 
             tabBarStyle: { backgroundColor: '#0a0a0a', borderTopColor: '#222' }, 
             tabBarActiveTintColor: '#00e5ff', 
-            lazy: false
+            lazy: true
           }}
         >
           <Tabs.Screen

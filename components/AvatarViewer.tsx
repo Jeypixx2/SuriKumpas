@@ -110,6 +110,7 @@ interface AvatarViewerProps {
     sequenceToPlay?: SequenceItem[] | null;
     avatarUri?: string;
     onSequenceEnd?: () => void;
+    active?: boolean;
 }
 
 export default function AvatarViewer({
@@ -120,7 +121,8 @@ export default function AvatarViewer({
     letterToPlay,
     sequenceToPlay,
     onSequenceEnd,
-    avatarUri = './avatar.vrm'
+    avatarUri = './avatar.vrm',
+    active = true
 }: AvatarViewerProps) {
     const glRef = useRef<ExpoWebGLRenderingContext | null>(null);
     const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
@@ -129,6 +131,16 @@ export default function AvatarViewer({
     const vrmRef = useRef<VRM | null>(null);
     const animatorRef = useRef<AvatarAnimator | null>(null);
     const animationFrameRef = useRef<number | null>(null);
+    const activeRef = useRef<boolean>(active);
+    const animateRef = useRef<(() => void) | null>(null);
+
+    useEffect(() => {
+        activeRef.current = active;
+        if (active && animateRef.current && !animationFrameRef.current) {
+            console.log('[AvatarViewer] Restarting animation loop...');
+            animateRef.current();
+        }
+    }, [active]);
 
     const onContextCreate = useCallback(async (gl: ExpoWebGLRenderingContext) => {
         console.log('[Avatar] onContextCreate FIRED! GL context acquired.');
@@ -190,6 +202,12 @@ export default function AvatarViewer({
             await loadVRM(scene);
 
             const animate = () => {
+                if (!activeRef.current) {
+                    console.log('[AvatarViewer] Stopping animation loop...');
+                    animationFrameRef.current = null;
+                    return;
+                }
+
                 animationFrameRef.current = requestAnimationFrame(animate);
 
                 if (animatorRef.current) {
@@ -206,7 +224,13 @@ export default function AvatarViewer({
 
                 gl.endFrameEXP();
             };
-            animate();
+            
+            animateRef.current = animate;
+
+            // Start loop if active
+            if (activeRef.current) {
+                animate();
+            }
 
         } catch (error) {
             console.error('Error initializing GL context:', error);
@@ -300,6 +324,8 @@ export default function AvatarViewer({
             { keyword: 'IM FINE', file: require('../assets/im_fine.glb') },
             { keyword: "I'M FINE", file: require('../assets/im_fine.glb') },
             { keyword: 'MABUTI', file: require('../assets/im_fine.glb') },
+            { keyword: 'THANK YOU', file: require('../assets/thank_you.glb') },
+            { keyword: 'SALAMAT', file: require('../assets/thank_you.glb') },
         ];
 
         const customLetters = [
@@ -319,19 +345,11 @@ export default function AvatarViewer({
             { keyword: 'N', file: require('../assets/n.glb') },
             { keyword: 'O', file: require('../assets/o.glb') },
             { keyword: 'P', file: require('../assets/p.glb') },
-            { keyword: 'Q', file: require('../assets/q.glb') },
-            { keyword: 'R', file: require('../assets/r.glb') },
-            { keyword: 'S', file: require('../assets/s.glb') },
-            { keyword: 'T', file: require('../assets/t.glb') },
-            { keyword: 'U', file: require('../assets/u.glb') },
-            { keyword: 'V', file: require('../assets/v.glb') },
-            { keyword: 'W', file: require('../assets/w.glb') },
-            { keyword: 'X', file: require('../assets/x.glb') },
-            { keyword: 'Y', file: require('../assets/y.glb') },
-            { keyword: 'Z', file: require('../assets/z.glb') },
         ];
 
-        console.log(`[Avatar] Background-loading ${customAnimations.length} sign GLBs and ${customLetters.length} letter GLBs...`);
+        console.log(`[Avatar] Background-loading ${customAnimations.length} sign GLBs and ${customLetters.length} letter GLBs in parallel...`);
+
+        const sharedLoader = new GLTFLoader();
 
         const loadItem = async (anim: { keyword: string, file: any }, isLetter: boolean) => {
             try {
@@ -343,13 +361,12 @@ export default function AvatarViewer({
                     const glbArrayBuffer = glbBuf.buffer.slice(glbBuf.byteOffset, glbBuf.byteOffset + glbBuf.byteLength);
 
                     const extGLTF: any = await new Promise((resolve, reject) => {
-                        const loader = new GLTFLoader();
-                        loader.parse(glbArrayBuffer, '', (gltf: any) => resolve(gltf), (err: any) => reject(err));
+                        sharedLoader.parse(glbArrayBuffer, '', (gltf: any) => resolve(gltf), (err: any) => reject(err));
                     });
 
                     if (extGLTF.animations && extGLTF.animations.length > 0) {
                         const clip = extGLTF.animations[0];
-                        console.log(`[Avatar] BG loaded: [${anim.keyword}] Tracks: ${clip.tracks.length}`);
+                        // console.log(`[Avatar] BG loaded: [${anim.keyword}] Tracks: ${clip.tracks.length}`);
                         if (isLetter) {
                             animator.setCustomLetterAnimation(anim.keyword, clip);
                         } else {
@@ -362,11 +379,20 @@ export default function AvatarViewer({
             }
         };
 
-        for (const anim of customAnimations) {
-            await loadItem(anim, false);
-        }
-        for (const letter of customLetters) {
-            await loadItem(letter, true);
+        // 🚀 BATCHED LOADING: Loading 40+ files at once crashes the JS thread. 
+        // We process them in batches of 5 with a small rest period.
+        const allItems = [
+            ...customAnimations.map(anim => ({ item: anim, isLetter: false })),
+            ...customLetters.map(letter => ({ item: letter, isLetter: true }))
+        ];
+
+        const BATCH_SIZE = 5;
+        for (let i = 0; i < allItems.length; i += BATCH_SIZE) {
+            const batch = allItems.slice(i, i + BATCH_SIZE);
+            await Promise.all(batch.map(entry => loadItem(entry.item, entry.isLetter)));
+            
+            // Small rest period to let the main thread process UI events or model loading
+            await new Promise(resolve => setTimeout(resolve, 100));
         }
 
         console.log('[Avatar] All background GLB animations loaded!');

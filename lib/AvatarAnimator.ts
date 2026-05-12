@@ -443,7 +443,7 @@ export class AvatarAnimator {
     private generateSignAnimations(): void {
         const signNames = [
             'GOOD MORNING', 'GOOD AFTERNOON', 'GOOD EVENING', 'HELLO', 'HOW ARE YOU',
-            'IM FINE', 'NICE TO MEET YOU', 'THANK YOU', 'YOURE WELCOME', 'SEE YOU TOMORROW',
+            'IM FINE', "I'M FINE", 'MABUTI', 'NICE TO MEET YOU', 'THANK YOU', 'YOURE WELCOME', 'SEE YOU TOMORROW',
             'UNDERSTAND', 'DON\'T UNDERSTAND', 'KNOW', 'DON\'T KNOW', 'NO', 'YES',
             'WRONG', 'CORRECT', 'SLOW', 'FAST',
             'ONE', 'TWO', 'THREE', 'FOUR', 'FIVE', 'SIX', 'SEVEN', 'EIGHT', 'NINE', 'TEN',

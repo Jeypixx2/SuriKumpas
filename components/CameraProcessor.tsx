@@ -7,6 +7,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 interface CameraProcessorProps {
     onKeypointsExtracted?: (keypoints: Float32Array | 'no-hands') => void;
     style?: any;
+    active?: boolean;
 }
 
 export interface CameraProcessorRef {
@@ -144,7 +145,10 @@ const MEDIAPIPE_SCRIPT = `
                 log('Front camera ready');
 
                 // 15fps frame loop (approx 1.3 seconds to accumulate 20 frames for FSL classification)
+                window.isTicking = false;
                 async function tick() {
+                    if (!window.isTicking) return;
+
                     const now = Date.now();
                     if (!isProcessing && (!window.lastTick || now - window.lastTick > 66)) {
                         isProcessing = true;
@@ -155,7 +159,19 @@ const MEDIAPIPE_SCRIPT = `
                     }
                     requestAnimationFrame(tick);
                 }
-                tick();
+
+                window.startTick = function() {
+                    if (!window.isTicking) {
+                        window.isTicking = true;
+                        tick();
+                    }
+                };
+                window.stopTick = function() {
+                    window.isTicking = false;
+                };
+
+                // Signal ready
+                window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ready' }));
 
             } catch(e) {
                 log('Init failed: ' + e.toString());
@@ -167,9 +183,9 @@ const MEDIAPIPE_SCRIPT = `
 `;
 
 const CameraProcessor = forwardRef<CameraProcessorRef, CameraProcessorProps>(
-    ({ onKeypointsExtracted, style }, ref) => {
+    ({ onKeypointsExtracted, style, active = true }, ref) => {
         const [permission, requestPermission] = useCameraPermissions();
-        const [htmlUri, setHtmlUri] = useState<string | null>(null);
+        const [isWebViewReady, setIsWebViewReady] = useState(false);
         const webViewRef = useRef<WebView>(null);
 
         useImperativeHandle(ref, () => ({
@@ -186,6 +202,13 @@ const CameraProcessor = forwardRef<CameraProcessorRef, CameraProcessorProps>(
                 requestPermission();
             }
         }, [permission, requestPermission]);
+
+        useEffect(() => {
+            if (isWebViewReady) {
+                const js = active ? 'window.startTick(); true;' : 'window.stopTick(); true;';
+                webViewRef.current?.injectJavaScript(js);
+            }
+        }, [active, isWebViewReady]);
 
         const htmlContent = `
             <!DOCTYPE html>
@@ -243,6 +266,9 @@ const CameraProcessor = forwardRef<CameraProcessorRef, CameraProcessorProps>(
                     onKeypointsExtracted?.('no-hands');
                 } else if (message.type === 'log') {
                     console.log('[WebView DOM]', message.message);
+                } else if (message.type === 'ready') {
+                    console.log('[CameraProcessor] WebView Ready Signal Received');
+                    setIsWebViewReady(true);
                 }
             } catch (error) {
                 console.error('Error parsing WebView message:', error);

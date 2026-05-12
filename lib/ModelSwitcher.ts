@@ -6,7 +6,7 @@ const RH_START = 1599;
 const RH_END   = 1662;
 
 export class ModelSwitcher {
-    private previousHandKeypoints: number[] | null = null;
+    private previousHandKeypoints: Float32Array | null = null;
     private movementThreshold: number = 0.003; // More sensitive
     private stillFrameCount: number = 0;
     private movingFrameCount: number = 0;
@@ -14,10 +14,12 @@ export class ModelSwitcher {
     private readonly movingThreshold = 2; // Faster transition
 
     detectMovement(currentKeypoints: Float32Array): { isMoving: boolean; confidence: number } {
-        // Extract hand keypoints from both hands
-        const currentHands: number[] = [];
-        for (let i = LH_START; i < LH_END; i++) currentHands.push(currentKeypoints[i]);
-        for (let i = RH_START; i < RH_END; i++) currentHands.push(currentKeypoints[i]);
+        // Extract hand keypoints from both hands (126 values total)
+        // We use a pre-allocated buffer if possible, but for simplicity let's at least use typed arrays
+        const currentHands = new Float32Array(126);
+        let idx = 0;
+        for (let i = LH_START; i < LH_END; i++) currentHands[idx++] = currentKeypoints[i];
+        for (let i = RH_START; i < RH_END; i++) currentHands[idx++] = currentKeypoints[i];
 
         if (!this.previousHandKeypoints) {
             this.previousHandKeypoints = currentHands;
@@ -46,7 +48,7 @@ export class ModelSwitcher {
         return { isMoving, confidence };
     }
 
-    private calculateMovement(prev: number[], curr: number[]): number {
+    private calculateMovement(prev: Float32Array, curr: Float32Array): number {
         let totalDiff = 0;
         let count = 0;
 
@@ -55,6 +57,8 @@ export class ModelSwitcher {
             if (prev[i] !== 0 && curr[i] !== 0) {
                 const dx = prev[i] - curr[i];
                 const dy = prev[i+1] - curr[i+1];
+                // Manually calculate hypotenuse to avoid Math.sqrt overhead if possible, 
+                // but sqrt is likely fine here.
                 totalDiff += Math.sqrt(dx*dx + dy*dy);
                 count++;
             }
