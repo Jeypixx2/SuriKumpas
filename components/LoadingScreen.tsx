@@ -19,17 +19,38 @@ export default function LoadingScreen({ steps, currentStep, appName = 'SuriKumpa
     const [activeSlide, setActiveSlide] = useState(0);
     const scrollX = useRef(new Animated.Value(0)).current;
 
+    // Pulse animation for logo glow
+    const logoGlow = useRef(new Animated.Value(0.4)).current;
+
     const slides = [
-        { type: 'text', title: 'How to use:' },
+        { type: 'text', title: 'HOW TO USE' },
         { type: 'image', source: require('../assets/home.jpg'), title: 'Home Dashboard' },
         { type: 'image', source: require('../assets/detect.jpg'), title: 'Sign Detection' },
         { type: 'image', source: require('../assets/translate.jpg'), title: 'Speech to Sign' },
     ];
 
     useEffect(() => {
+        // Loop the logo ambient pulse
+        Animated.loop(
+            Animated.sequence([
+                Animated.timing(logoGlow, {
+                    toValue: 0.9,
+                    duration: 1200,
+                    useNativeDriver: true,
+                }),
+                Animated.timing(logoGlow, {
+                    toValue: 0.4,
+                    duration: 1200,
+                    useNativeDriver: true,
+                }),
+            ])
+        ).start();
+    }, []);
+
+    useEffect(() => {
         const timer = setInterval(() => {
             setActiveSlide((prev) => (prev + 1) % slides.length);
-        }, 2500);
+        }, 3000);
 
         return () => clearInterval(timer);
     }, []);
@@ -50,7 +71,7 @@ export default function LoadingScreen({ steps, currentStep, appName = 'SuriKumpa
             case 'error':
                 return <Text style={styles.errorIcon}>✗</Text>;
             case 'loading':
-                return <ActivityIndicator size="small" color="#00e5ff" />;
+                return <ActivityIndicator size="small" color="#5BC4B5" />;
             default:
                 return <Text style={styles.pendingIcon}>○</Text>;
         }
@@ -71,12 +92,20 @@ export default function LoadingScreen({ steps, currentStep, appName = 'SuriKumpa
 
     return (
         <View style={styles.container}>
+            {/* Logo and Brand */}
             <View style={styles.logoContainer}>
-                <Image source={require('../assets/adaptive-icon.png')} style={styles.logo} resizeMode="contain" />
+                {/* Glowing ring behind the logo */}
+                <Animated.View style={[styles.glowRing, { opacity: logoGlow }]} />
+                <View style={styles.logoBorder}>
+                    <Image source={require('../assets/adaptive-icon.png')} style={styles.logo} resizeMode="contain" />
+                </View>
                 <Text style={styles.appName}>{appName}</Text>
-                <Text style={styles.tagline}>Filipino Sign Language Recognition</Text>
+                <View style={styles.taglinePill}>
+                    <Text style={styles.tagline}>FILIPINO SIGN LANGUAGE TRANSLATION</Text>
+                </View>
             </View>
 
+            {/* Glassmorphic Slideshow instructions */}
             <View style={styles.sliderWrapper}>
                 <Animated.View style={[styles.sliderContent, { transform: [{ translateX: scrollX }] }]}>
                     {slides.map((slide, index) => (
@@ -85,21 +114,21 @@ export default function LoadingScreen({ steps, currentStep, appName = 'SuriKumpa
                                 <View style={styles.instructionsContainer}>
                                     <Text style={styles.instructionTitle}>{slide.title}</Text>
                                     <View style={styles.instructionItem}>
-                                        <Text style={styles.instructionBullet}>•</Text>
-                                        <Text style={styles.instructionText}>Sign to Text: Ensure hands are visible to the camera.</Text>
+                                        <View style={styles.bulletDot} />
+                                        <Text style={styles.instructionText}>Sign to Text: Point camera at your hands to translate gestures.</Text>
                                     </View>
                                     <View style={styles.instructionItem}>
-                                        <Text style={styles.instructionBullet}>•</Text>
-                                        <Text style={styles.instructionText}>Speech to Sign: Press Mic and speak to translate.</Text>
+                                        <View style={styles.bulletDot} />
+                                        <Text style={styles.instructionText}>Speech to Sign: Tap Mic and speak to translate voice to 3D signing.</Text>
                                     </View>
                                     <View style={styles.instructionItem}>
-                                        <Text style={styles.instructionBullet}>•</Text>
-                                        <Text style={styles.instructionText}>Positioning: Use a stable surface for best results.</Text>
+                                        <View style={styles.bulletDot} />
+                                        <Text style={styles.instructionText}>Stability: Put device on a flat surface for optimal capture.</Text>
                                     </View>
                                 </View>
                             ) : (
                                 <View style={styles.imageSlideContainer}>
-                                    <Image source={slide.source} style={styles.slideImage} resizeMode="contain" />
+                                    <Image source={slide.source} style={styles.slideImage} resizeMode="cover" />
                                     <View style={styles.imageOverlay}>
                                         <Text style={styles.imageTitle}>{slide.title}</Text>
                                     </View>
@@ -116,6 +145,7 @@ export default function LoadingScreen({ steps, currentStep, appName = 'SuriKumpa
                 </View>
             </View>
 
+            {/* List of loading steps */}
             <View style={styles.stepsContainer}>
                 {steps.map((step, index) => (
                     <View
@@ -139,6 +169,7 @@ export default function LoadingScreen({ steps, currentStep, appName = 'SuriKumpa
                 ))}
             </View>
 
+            {/* Bottom Progress Bar */}
             <View style={styles.progressContainer}>
                 <View style={styles.progressBar}>
                     <View
@@ -149,7 +180,7 @@ export default function LoadingScreen({ steps, currentStep, appName = 'SuriKumpa
                     />
                 </View>
                 <Text style={styles.progressText}>
-                    Step {Math.min(currentStep + 1, steps.length)} of {steps.length}
+                    STEP {Math.min(currentStep + 1, steps.length)} OF {steps.length}
                 </Text>
             </View>
         </View>
@@ -159,42 +190,87 @@ export default function LoadingScreen({ steps, currentStep, appName = 'SuriKumpa
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        backgroundColor: '#0a0a0a',
+        backgroundColor: '#FFF9F5',
         alignItems: 'center',
         justifyContent: 'center',
-        padding: 30,
+        paddingHorizontal: 30,
+        paddingTop: 50,
+        paddingBottom: 40,
     },
     logoContainer: {
         alignItems: 'center',
-        marginBottom: 30,
+        marginBottom: 32,
+        position: 'relative',
+    },
+    glowRing: {
+        position: 'absolute',
+        top: 0,
+        width: 108,
+        height: 108,
+        borderRadius: 54,
+        backgroundColor: 'rgba(168, 230, 207, 0.5)',
+        shadowColor: '#5BC4B5',
+        shadowOffset: { width: 0, height: 0 },
+        shadowOpacity: 0.5,
+        shadowRadius: 20,
+        elevation: 8,
+    },
+    logoBorder: {
+        width: 104,
+        height: 104,
+        borderRadius: 52,
+        padding: 3,
+        borderWidth: 2,
+        borderColor: '#A8E6CF',
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: '#fff',
+        marginBottom: 16,
+        shadowColor: '#5BC4B5',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.2,
+        shadowRadius: 12,
+        elevation: 6,
     },
     logo: {
-        width: 120,
-        height: 120,
-        marginBottom: 20,
-        borderRadius: 60,
-        overflow: 'hidden',
+        width: 90,
+        height: 90,
+        borderRadius: 45,
     },
     appName: {
-        fontSize: 32,
-        fontWeight: 'bold',
-        color: '#ffffff',
-        marginBottom: 8,
+        fontSize: 30,
+        fontWeight: '900',
+        color: '#2D3561',
+        letterSpacing: 0.3,
+    },
+    taglinePill: {
+        backgroundColor: '#A8E6CF',
+        borderRadius: 20,
+        paddingHorizontal: 14,
+        paddingVertical: 5,
+        marginTop: 8,
     },
     tagline: {
-        fontSize: 14,
-        color: '#888888',
+        fontSize: 9,
+        fontWeight: 'bold',
+        color: '#2B9C8E',
+        letterSpacing: 1.5,
         textAlign: 'center',
     },
     sliderWrapper: {
         width: SLIDE_WIDTH,
-        height: 280,
+        height: 200,
         overflow: 'hidden',
-        marginBottom: 30,
-        borderRadius: 16,
-        backgroundColor: '#000',
-        borderWidth: 2,
-        borderColor: 'rgba(0, 229, 255, 0.3)',
+        marginBottom: 32,
+        borderRadius: 22,
+        backgroundColor: '#FFFFFF',
+        borderWidth: 1.5,
+        borderColor: '#EEE8FF',
+        shadowColor: '#8080B0',
+        shadowOffset: { width: 0, height: 3 },
+        shadowOpacity: 0.1,
+        shadowRadius: 10,
+        elevation: 4,
     },
     sliderContent: {
         flexDirection: 'row',
@@ -202,14 +278,14 @@ const styles = StyleSheet.create({
     },
     slide: {
         width: SLIDE_WIDTH,
-        height: 280,
+        height: 200,
         justifyContent: 'center',
     },
     imageSlideContainer: {
         width: '100%',
         height: '100%',
         position: 'relative',
-        backgroundColor: '#000',
+        backgroundColor: '#F5F0FF',
         justifyContent: 'center',
         alignItems: 'center',
     },
@@ -219,25 +295,25 @@ const styles = StyleSheet.create({
     },
     imageOverlay: {
         position: 'absolute',
-        top: 10,
-        right: 10,
-        backgroundColor: 'rgba(0, 229, 255, 0.2)',
-        paddingHorizontal: 12,
+        bottom: 12,
+        left: 12,
+        backgroundColor: 'rgba(255, 255, 255, 0.88)',
+        paddingHorizontal: 10,
         paddingVertical: 4,
-        borderRadius: 20,
+        borderRadius: 10,
         borderWidth: 1,
-        borderColor: 'rgba(0, 229, 255, 0.5)',
+        borderColor: '#C9B8F0',
     },
     imageTitle: {
-        color: '#00e5ff',
-        fontSize: 11,
+        color: '#5E35B1',
+        fontSize: 10,
         fontWeight: 'bold',
         textTransform: 'uppercase',
         letterSpacing: 1,
     },
     pagination: {
         position: 'absolute',
-        bottom: 10,
+        bottom: 12,
         left: 0,
         right: 0,
         flexDirection: 'row',
@@ -248,120 +324,130 @@ const styles = StyleSheet.create({
         width: 6,
         height: 6,
         borderRadius: 3,
-        backgroundColor: 'rgba(255, 255, 255, 0.3)',
+        backgroundColor: 'rgba(126, 87, 194, 0.2)',
     },
     dotActive: {
-        backgroundColor: '#00e5ff',
-        width: 12,
+        backgroundColor: '#7E57C2',
+        width: 14,
+        borderRadius: 3,
     },
     instructionsContainer: {
-        padding: 16,
+        paddingHorizontal: 20,
+        paddingVertical: 15,
+        justifyContent: 'center',
     },
     instructionTitle: {
-        color: '#00e5ff',
-        fontSize: 16,
-        fontWeight: 'bold',
-        marginBottom: 10,
+        color: '#5BC4B5',
+        fontSize: 13,
+        fontWeight: '900',
+        letterSpacing: 1.5,
+        marginBottom: 12,
     },
     instructionItem: {
         flexDirection: 'row',
-        marginBottom: 6,
-        alignItems: 'flex-start',
+        marginBottom: 8,
+        alignItems: 'center',
     },
-    instructionBullet: {
-        color: '#00e5ff',
-        fontSize: 16,
-        marginRight: 8,
-        fontWeight: 'bold',
-        lineHeight: 20,
+    bulletDot: {
+        width: 6,
+        height: 6,
+        borderRadius: 3,
+        backgroundColor: '#A8E6CF',
+        marginRight: 10,
     },
     instructionText: {
-        color: '#cccccc',
-        fontSize: 14,
-        lineHeight: 20,
+        color: '#7A7A9D',
+        fontSize: 12,
+        lineHeight: 18,
         flex: 1,
     },
     stepsContainer: {
         width: '100%',
-        marginBottom: 40,
+        marginBottom: 32,
     },
     step: {
         flexDirection: 'row',
         alignItems: 'center',
         paddingVertical: 12,
         paddingHorizontal: 16,
-        borderRadius: 8,
+        borderRadius: 14,
         marginBottom: 8,
+        borderWidth: 1.5,
+        borderColor: 'transparent',
     },
     stepPending: {
         backgroundColor: 'transparent',
     },
     stepLoading: {
-        backgroundColor: 'rgba(0, 229, 255, 0.1)',
-        borderWidth: 1,
-        borderColor: '#00e5ff',
+        backgroundColor: '#EDFAF7',
+        borderColor: '#A8E6CF',
     },
     stepComplete: {
-        backgroundColor: 'rgba(0, 229, 255, 0.05)',
+        backgroundColor: '#F5FFF9',
+        borderColor: '#C8F0D8',
     },
     stepError: {
-        backgroundColor: 'rgba(255, 0, 0, 0.1)',
-        borderWidth: 1,
-        borderColor: '#ff0000',
+        backgroundColor: '#FFF0F0',
+        borderColor: '#FFCCCC',
     },
     stepIcon: {
-        width: 24,
-        height: 24,
+        width: 22,
+        height: 22,
         alignItems: 'center',
         justifyContent: 'center',
         marginRight: 12,
     },
     pendingIcon: {
-        color: '#555555',
-        fontSize: 16,
+        color: '#C0C0D8',
+        fontSize: 14,
     },
     completeIcon: {
-        color: '#00e5ff',
-        fontSize: 18,
+        color: '#5BC4B5',
+        fontSize: 15,
         fontWeight: 'bold',
     },
     errorIcon: {
-        color: '#ff0000',
-        fontSize: 18,
+        color: '#E57373',
+        fontSize: 15,
         fontWeight: 'bold',
     },
     stepLabel: {
-        fontSize: 14,
-        color: '#666666',
+        fontSize: 13,
+        color: '#B0B0C8',
+        fontWeight: '500',
     },
     stepLabelActive: {
-        color: '#00e5ff',
-        fontWeight: '600',
+        color: '#2B9C8E',
+        fontWeight: 'bold',
     },
     stepLabelComplete: {
-        color: '#ffffff',
+        color: '#2D3561',
+        fontWeight: '600',
     },
     progressContainer: {
         width: '100%',
     },
     progressBar: {
-        height: 4,
-        backgroundColor: 'rgba(255, 255, 255, 0.1)',
-        borderRadius: 2,
+        height: 7,
+        backgroundColor: '#EEE8FF',
+        borderRadius: 4,
         overflow: 'hidden',
-        marginBottom: 12,
+        marginBottom: 10,
     },
     progressFill: {
         height: '100%',
-        backgroundColor: '#00e5ff',
-        shadowColor: '#00e5ff',
+        backgroundColor: '#5BC4B5',
+        borderRadius: 4,
+        shadowColor: '#5BC4B5',
         shadowOffset: { width: 0, height: 0 },
-        shadowOpacity: 0.8,
-        shadowRadius: 5,
+        shadowOpacity: 0.4,
+        shadowRadius: 6,
     },
     progressText: {
-        color: '#888888',
-        fontSize: 12,
+        color: '#B0B0C8',
+        fontSize: 10,
+        fontWeight: 'bold',
+        letterSpacing: 1,
         textAlign: 'center',
     },
 });

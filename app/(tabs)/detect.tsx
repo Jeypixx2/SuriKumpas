@@ -1,11 +1,11 @@
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
-import { StyleSheet, View, Text, TouchableOpacity, Alert } from 'react-native';
+import { StyleSheet, View, Text, TouchableOpacity, Alert, Animated } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useIsFocused } from '@react-navigation/native';
 import { MaterialIcons } from '@expo/vector-icons';
 import CameraProcessor, { CameraProcessorRef } from '../../components/CameraProcessor';
 import ResultOverlay from '../../components/ResultOverlay';
-import { SignClassifier } from '../../lib/SignClassifier';
+import { globalClassifier } from '../../lib/SignClassifier';
 import { ModelSwitcher } from '../../lib/ModelSwitcher';
 import { getLabelById, FSLLabel, ALPHABET_LABELS, tokenizeSentence } from '../../lib/labels';
 import { useAvatarContext } from '../../lib/AvatarContext';
@@ -20,7 +20,7 @@ const RH_START = 1599;
 
 export default function DetectScreen() {
     const router = useRouter();
-    const classifierRef = useRef(new SignClassifier());
+    const classifierRef = useRef(globalClassifier);
     const modelSwitcherRef = useRef(new ModelSwitcher());
     const cameraRef = useRef<CameraProcessorRef>(null);
     const isFocused = useIsFocused();
@@ -31,10 +31,10 @@ export default function DetectScreen() {
     const [showResult, setShowResult] = useState(false);
     const [status, setStatus] = useState('Paghahanda...');
     const [debugInfo, setDebugInfo] = useState('');
-    const [isMirrored, setIsMirrored] = useState(true); // Default to selfie mode
+    const [isMirrored, setIsMirrored] = useState(true);
  
     const frameBufferRef = useRef<Float32Array[]>([]);
-    const predictionHistoryRef = useRef<string[]>([]); // Rolling buffer for stability
+    const predictionHistoryRef = useRef<string[]>([]);
     const lastDetectionRef = useRef<number>(0);
     const isProcessingRef = useRef<boolean>(false);
     const lastAttemptRef = useRef<number>(0);
@@ -46,6 +46,26 @@ export default function DetectScreen() {
             modelSwitcherRef.current.reset();
         }
     }, [isFocused]);
+
+    // Pulse animation for active dot
+    const pulseDot = useRef(new Animated.Value(0.4)).current;
+
+    useEffect(() => {
+        Animated.loop(
+            Animated.sequence([
+                Animated.timing(pulseDot, {
+                    toValue: 1,
+                    duration: 900,
+                    useNativeDriver: true,
+                }),
+                Animated.timing(pulseDot, {
+                    toValue: 0.4,
+                    duration: 900,
+                    useNativeDriver: true,
+                }),
+            ])
+        ).start();
+    }, []);
 
     useEffect(() => {
         const loadModels = async () => {
@@ -67,7 +87,6 @@ export default function DetectScreen() {
         if (keypoints === 'no-hands') {
             setStatus('Walang kamay na nakita.');
             
-            // CRITICAL: Pad buffer with 0s to maintain sequence timing instead of clearing it
             frameBufferRef.current.push(new Float32Array(1662));
             if (frameBufferRef.current.length > 30) frameBufferRef.current.shift();
             
@@ -77,10 +96,8 @@ export default function DetectScreen() {
         }
  
         const now = Date.now();
-        // Allow slightly faster processing
         if (now - lastDetectionRef.current < 100) return;
  
-        // Check for hands at the correct new indices
         let handsDetected = false;
         for (let i = LH_START; i < LH_START + 63; i++) {
             if (keypoints[i] !== 0) { handsDetected = true; break; }
@@ -94,7 +111,6 @@ export default function DetectScreen() {
         if (!handsDetected) {
             setStatus('Walang kamay na nakita.');
             
-            // CRITICAL: Pad buffer with 0s to maintain sequence timing
             frameBufferRef.current.push(new Float32Array(1662));
             if (frameBufferRef.current.length > 30) frameBufferRef.current.shift();
             
@@ -104,25 +120,17 @@ export default function DetectScreen() {
  
         const movementResult = modelSwitcherRef.current.detectMovement(keypoints);
         
-        // APPLY MIRRORING FIX IF NEEDED
-        // We modify keypoints in-place to avoid allocations (it's a fresh copy from the WebView bridge anyway)
         if (!isMirrored) {
-            // Combine all loops into one for better performance
-            // 1. Pose (0..131)
             for (let i = 0; i < 132; i += 4) {
                 if (keypoints[i] !== 0) keypoints[i] = 1.0 - keypoints[i];
             }
-            // 2. Face (132..1535)
             for (let i = 132; i < 1536; i += 3) {
                 if (keypoints[i] !== 0) keypoints[i] = 1.0 - keypoints[i];
             }
-            // 3. Hands (1536..1661)
             for (let i = 1536; i < 1662; i += 3) {
                 if (keypoints[i] !== 0) keypoints[i] = 1.0 - keypoints[i];
             }
 
-            // IMPORTANT: Swapping LH and RH data because flipping X turns a left hand into a right hand
-            // We use a small temporary buffer for the swap
             const tempLH = keypoints.slice(1536, 1599);
             const tempRH = keypoints.slice(1599, 1662);
             keypoints.set(tempRH, 1536);
@@ -131,18 +139,15 @@ export default function DetectScreen() {
 
         const processedKeypoints = keypoints;
 
-        // UNCONDITIONALLY maintain 30 frame window for temporal consistency
         frameBufferRef.current.push(processedKeypoints);
         if (frameBufferRef.current.length > 30) frameBufferRef.current.shift();
 
         const movStr = `Mov:${movementResult.confidence.toFixed(2)}`;
  
-        // Prevent concurrent TFLite inferences which cause native crashes
         if (isProcessingRef.current) return;
         isProcessingRef.current = true;
 
         try {
-            // If the hand is completely still, run the Alphabet model
             if (movementResult.confidence >= 1.0) {
             setStatus('Sinusuri ang letra...');
             
@@ -152,11 +157,9 @@ export default function DetectScreen() {
                 setDebugInfo(`${movStr} | Letra: ${letter} (${(result.confidence * 100).toFixed(0)}%)`);
  
                 if (result.confidence > 0.15 && letter) {
-                    // Rolling average for letters
                     predictionHistoryRef.current.push(letter);
                     if (predictionHistoryRef.current.length > 5) predictionHistoryRef.current.shift();
 
-                    // Count occurrences
                     const counts: { [key: string]: number } = {};
                     predictionHistoryRef.current.forEach(l => counts[l] = (counts[l] || 0) + 1);
                     const mostFrequent = Object.keys(counts).reduce((a, b) => counts[a] > counts[b] ? a : b);
@@ -181,7 +184,6 @@ export default function DetectScreen() {
                 setDebugInfo("Alphabet Err: " + (e.message || String(e)));
             }
         } else {
-            // Hand is moving or transitioning, run the FSL model
                 setStatus('Kumukumpas...');
                 
                 if (frameBufferRef.current.length === 30) {
@@ -191,14 +193,12 @@ export default function DetectScreen() {
                         
                         setDebugInfo(`${movStr} | FSL: ${label.english} (${(result.confidence * 100).toFixed(0)}%)`);
      
-                        // Lowered threshold to 0.40 to ensure signs trigger reliably
                         if (result.confidence > 0.40) { 
                             setStatus(`Natukoy: ${label.filipino} (${(result.confidence * 100).toFixed(0)}%)`);
                             
                             predictionHistoryRef.current.push(label.english);
                             if (predictionHistoryRef.current.length > 2) predictionHistoryRef.current.shift();
      
-                            // Require 2 consecutive frames of the exact same prediction
                             const isConsistent = predictionHistoryRef.current.length === 2 && 
                                                  predictionHistoryRef.current[0] === label.english &&
                                                  predictionHistoryRef.current[1] === label.english;
@@ -219,7 +219,6 @@ export default function DetectScreen() {
                                 setTimeout(() => setShowResult(false), 2000);
                             }
                         } else {
-                            // Break the consistency chain if confidence drops
                             predictionHistoryRef.current = [];
                         }
                     } catch (e: any) {
@@ -243,13 +242,30 @@ export default function DetectScreen() {
                     active={isFocused}
                 />
                 <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
-                    <MaterialIcons name="arrow-back" size={28} color="#ffffff" />
+                    <MaterialIcons name="arrow-back" size={22} color="#2D3561" />
                 </TouchableOpacity>
             </View>
 
             <View style={styles.bottomHalf}>
-                <Text style={styles.statusText}>{status}</Text>
-                {!!debugInfo && <Text style={styles.debugText}>{debugInfo}</Text>}
+                {/* Custom Pulsing Status Pill */}
+                <View style={styles.statusPill}>
+                    <Animated.View style={[
+                        styles.statusDot, 
+                        { 
+                            opacity: pulseDot,
+                            backgroundColor: status.includes('Walang') ? '#FF8A65' : 
+                                            status.includes('Error') ? '#E57373' : '#5BC4B5'
+                        }
+                    ]} />
+                    <Text style={styles.statusText}>{status}</Text>
+                </View>
+
+                {!!debugInfo && (
+                    <View style={styles.debugPanel}>
+                        <Text style={styles.debugText}>{debugInfo}</Text>
+                    </View>
+                )}
+
                 <ResultOverlay label={detectedLabel} confidence={confidence} visible={showResult} />
                 
                 <View style={styles.dotPattern}>
@@ -262,7 +278,7 @@ export default function DetectScreen() {
                     style={styles.mirrorToggle} 
                     onPress={() => setIsMirrored(!isMirrored)}
                 >
-                    <MaterialIcons name="flip" size={24} color="#00e5ff" />
+                    <MaterialIcons name="flip" size={18} color="#5BC4B5" />
                     <Text style={styles.mirrorText}>{isMirrored ? 'Mirrored' : 'Normal'}</Text>
                 </TouchableOpacity>
             </View>
@@ -271,34 +287,92 @@ export default function DetectScreen() {
 }
 
 const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: '#0a0a0a' },
+    container: { flex: 1, backgroundColor: '#FFF9F5' },
     topHalf: { height: '50%', width: '100%', position: 'relative' },
     bottomHalf: { 
-        height: '50%', width: '100%', backgroundColor: '#111111', 
+        height: '50%', width: '100%', backgroundColor: '#FAFAFE', 
         justifyContent: 'center', alignItems: 'center',
-        borderTopWidth: 2, borderTopColor: '#00e5ff' 
+        borderTopWidth: 2, 
+        borderTopColor: '#A8E6CF',
+        shadowColor: '#5BC4B5',
+        shadowOffset: { width: 0, height: -3 },
+        shadowOpacity: 0.12,
+        shadowRadius: 12,
+        elevation: 10,
     },
     camera: { flex: 1 },
     backButton: {
         position: 'absolute', top: 50, left: 20, width: 44, height: 44,
-        borderRadius: 22, backgroundColor: 'rgba(0, 0, 0, 0.5)',
+        borderRadius: 22, backgroundColor: 'rgba(255, 255, 255, 0.9)',
         alignItems: 'center', justifyContent: 'center', zIndex: 10,
+        borderWidth: 1.5,
+        borderColor: '#A8E6CF',
+        shadowColor: '#5BC4B5',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.2,
+        shadowRadius: 6,
+        elevation: 4,
+    },
+    statusPill: {
+        position: 'absolute', 
+        top: 24, 
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#FFFFFF',
+        borderWidth: 1.5,
+        borderColor: '#E0F5F2',
+        borderRadius: 22,
+        paddingHorizontal: 16,
+        paddingVertical: 8,
+        shadowColor: '#5BC4B5',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.12,
+        shadowRadius: 6,
+        elevation: 3,
+    },
+    statusDot: {
+        width: 8,
+        height: 8,
+        borderRadius: 4,
+        marginRight: 8,
     },
     statusText: {
-        position: 'absolute', top: 30, color: '#00e5ff', fontSize: 13,
-        fontWeight: '600', textTransform: 'uppercase', letterSpacing: 2,
+        color: '#2D3561', 
+        fontSize: 12,
+        fontWeight: 'bold', 
+        letterSpacing: 0.4,
+    },
+    debugPanel: {
+        position: 'absolute', 
+        top: 72, 
+        backgroundColor: 'rgba(255,255,255,0.9)', 
+        borderWidth: 1,
+        borderColor: '#A8E6CF',
+        paddingHorizontal: 10,
+        paddingVertical: 4,
+        borderRadius: 8,
     },
     debugText: {
-        position: 'absolute', top: 60, color: '#ffffff', fontSize: 11,
-        backgroundColor: 'rgba(0, 0, 0, 0.6)', padding: 6, borderRadius: 4,
+        color: '#7A7A9D', 
+        fontSize: 10,
+        fontFamily: 'monospace',
     },
     mirrorToggle: {
         position: 'absolute', bottom: 30, right: 20, 
         flexDirection: 'row', alignItems: 'center', 
-        backgroundColor: 'rgba(0,0,0,0.5)', padding: 8, borderRadius: 20,
-        borderWidth: 1, borderColor: '#00e5ff'
+        backgroundColor: '#FFFFFF', 
+        paddingHorizontal: 14,
+        paddingVertical: 8,
+        borderRadius: 22,
+        borderWidth: 1.5, 
+        borderColor: '#A8E6CF',
+        shadowColor: '#5BC4B5',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.15,
+        shadowRadius: 6,
+        elevation: 3,
     },
-    mirrorText: { color: '#00e5ff', marginLeft: 8, fontSize: 12, fontWeight: 'bold' },
+    mirrorText: { color: '#2B9C8E', marginLeft: 6, fontSize: 11, fontWeight: 'bold', letterSpacing: 0.4 },
     dotPattern: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, pointerEvents: 'none' },
-    dot: { position: 'absolute', width: 2, height: 2, borderRadius: 1, backgroundColor: 'rgba(0, 229, 255, 0.15)' },
+    dot: { position: 'absolute', width: 3, height: 3, borderRadius: 1.5, backgroundColor: 'rgba(91, 196, 181, 0.15)' },
 });

@@ -31,6 +31,10 @@ export class SignClassifier {
     }
 
     async loadFSLModel(): Promise<void> {
+        if (this.fslModel !== null) {
+            console.log('[TFLite] FSL model already loaded.');
+            return;
+        }
         try {
             const uri = await this.getLocalModelUri(require('../assets/fsl_model.tflite'), 'fsl_model.tflite');
             this.fslModel = await loadTensorflowModel({ url: uri }, []);
@@ -42,6 +46,10 @@ export class SignClassifier {
     }
  
     async loadAlphabetModel(): Promise<void> {
+        if (this.alphabetModel !== null) {
+            console.log('[TFLite] Alphabet model already loaded.');
+            return;
+        }
         try {
             const uri = await this.getLocalModelUri(require('../assets/alphabet_model.tflite'), 'alphabet_model.tflite');
             this.alphabetModel = await loadTensorflowModel({ url: uri }, []);
@@ -195,3 +203,5 @@ export class SignClassifier {
         return result;
     }
 }
+
+export const globalClassifier = new SignClassifier();

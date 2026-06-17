@@ -41,6 +41,45 @@ import { VRM, VRMUtils, VRMLoaderPlugin } from '@pixiv/three-vrm';
 import { AvatarAnimator } from '../lib/AvatarAnimator';
 import { SequenceItem } from '../lib/labels';
 
+const CUSTOM_ANIMATIONS: Record<string, any> = {
+    'GOOD MORNING': require('../assets/good_morning.glb'),
+    'GOOD EVENING': require('../assets/good_evening.glb'),
+    'GOOD NIGHT': require('../assets/good_night.glb'),
+    'MAGANDANG UMAGA': require('../assets/good_morning.glb'),
+    'MAGANDANG GABI': require('../assets/good_evening.glb'),
+    'HELLO': require('../assets/hello.glb'),
+    'HOW ARE YOU': require('../assets/how_are_you.glb'),
+    'KUMUSTA KA': require('../assets/how_are_you.glb'),
+    'AUNTIE': require('../assets/auntie.glb'),
+    'TITA': require('../assets/auntie.glb'),
+    'IM FINE': require('../assets/im_fine.glb'),
+    "I'M FINE": require('../assets/im_fine.glb'),
+    'MABUTI': require('../assets/im_fine.glb'),
+    'THANK YOU': require('../assets/thank_you.glb'),
+    'SALAMAT': require('../assets/thank_you.glb'),
+};
+
+const CUSTOM_LETTERS: Record<string, any> = {
+    'A': require('../assets/a.glb'),
+    'B': require('../assets/b.glb'),
+    'C': require('../assets/c.glb'),
+    'D': require('../assets/d.glb'),
+    'E': require('../assets/e.glb'),
+    'F': require('../assets/f.glb'),
+    'G': require('../assets/g.glb'),
+    'H': require('../assets/h.glb'),
+    'I': require('../assets/i.glb'),
+    'J': require('../assets/j.glb'),
+    'K': require('../assets/k.glb'),
+    'L': require('../assets/l.glb'),
+    'M': require('../assets/m.glb'),
+    'N': require('../assets/n.glb'),
+    'O': require('../assets/o.glb'),
+    'P': require('../assets/p.glb'),
+};
+
+const sharedLoader = new GLTFLoader();
+
 // Apply Polyfills for all Three.js Loaders to intercept and prevent native execution hangs
 ['ImageLoader', 'ImageBitmapLoader', 'TextureLoader', 'FileLoader'].forEach((loaderName) => {
     const loaderClass = (THREE as any)[loaderName];
@@ -130,6 +169,7 @@ export default function AvatarViewer({
     const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
     const vrmRef = useRef<VRM | null>(null);
     const animatorRef = useRef<AvatarAnimator | null>(null);
+    const loadedAnimationsRef = useRef<Set<string>>(new Set());
     const animationFrameRef = useRef<number | null>(null);
     const activeRef = useRef<boolean>(active);
     const animateRef = useRef<(() => void) | null>(null);
@@ -227,6 +267,16 @@ export default function AvatarViewer({
             
             animateRef.current = animate;
 
+            // 🚀 Force shader compilation immediately even if hidden, so it appears instantly later
+            try {
+                if (renderer && scene && camera) {
+                    renderer.render(scene, camera);
+                    gl.endFrameEXP();
+                }
+            } catch (e) {
+                console.error('[Avatar] Initial render crash:', e);
+            }
+
             // Start loop if active
             if (activeRef.current) {
                 animate();
@@ -236,7 +286,7 @@ export default function AvatarViewer({
             console.error('Error initializing GL context:', error);
             onError?.(error instanceof Error ? error : new Error(String(error)));
         }
-    }, [onError]);
+    }, [onError, active, signToPlay, letterToPlay, sequenceToPlay]);
 
     const loadVRM = async (scene: THREE.Scene) => {
         console.log('[Avatar] Starting loadVRM...');
@@ -295,13 +345,21 @@ export default function AvatarViewer({
             console.log('[Avatar] VRM loaded. Showing avatar instantly...');
             onVRMLoaded?.();
 
-            // Play any outstanding animation requests (pendingSequence will queue them if GLBs aren't ready yet)
-            if (sequenceToPlay && sequenceToPlay.length > 0) animator.playSequence(sequenceToPlay);
-            else if (signToPlay) animator.playSignAnimation(signToPlay);
-            else if (letterToPlay) animator.playLetterAnimation(letterToPlay);
-
-            // ⬇️ Load GLBs quietly in the background — pendingSequence handles any requests made before they finish
-            loadCustomAnimations(animator);
+            const playInitial = async () => {
+                if (sequenceToPlay && sequenceToPlay.length > 0) {
+                    for (const item of sequenceToPlay) {
+                        await ensureAnimationLoaded(item.value, item.type === 'letter', animator);
+                    }
+                    animator.playSequence(sequenceToPlay);
+                } else if (signToPlay) {
+                    await ensureAnimationLoaded(signToPlay, false, animator);
+                    animator.playSignAnimation(signToPlay);
+                } else if (letterToPlay) {
+                    await ensureAnimationLoaded(letterToPlay, true, animator);
+                    animator.playLetterAnimation(letterToPlay);
+                }
+            };
+            playInitial();
 
         } catch (error) {
             console.error('Error loading VRM:', error);
@@ -309,112 +367,72 @@ export default function AvatarViewer({
         }
     };
 
-    const loadCustomAnimations = async (animator: AvatarAnimator) => {
-        const customAnimations = [
-            { keyword: 'GOOD MORNING', file: require('../assets/good_morning.glb') },
-            { keyword: 'GOOD EVENING', file: require('../assets/good_evening.glb') },
-            { keyword: 'GOOD NIGHT', file: require('../assets/good_night.glb') },
-            { keyword: 'MAGANDANG UMAGA', file: require('../assets/good_morning.glb') },
-            { keyword: 'MAGANDANG GABI', file: require('../assets/good_evening.glb') },
-            { keyword: 'HELLO', file: require('../assets/hello.glb') },
-            { keyword: 'HOW ARE YOU', file: require('../assets/how_are_you.glb') },
-            { keyword: 'KUMUSTA KA', file: require('../assets/how_are_you.glb') },
-            { keyword: 'AUNTIE', file: require('../assets/auntie.glb') },
-            { keyword: 'TITA', file: require('../assets/auntie.glb') },
-            { keyword: 'IM FINE', file: require('../assets/im_fine.glb') },
-            { keyword: "I'M FINE", file: require('../assets/im_fine.glb') },
-            { keyword: 'MABUTI', file: require('../assets/im_fine.glb') },
-            { keyword: 'THANK YOU', file: require('../assets/thank_you.glb') },
-            { keyword: 'SALAMAT', file: require('../assets/thank_you.glb') },
-        ];
+    const ensureAnimationLoaded = async (keyword: string, isLetter: boolean, animator: AvatarAnimator) => {
+        const cacheKey = isLetter ? `letter_${keyword}` : `sign_${keyword}`;
+        if (loadedAnimationsRef.current.has(cacheKey)) return;
 
-        const customLetters = [
-            { keyword: 'A', file: require('../assets/a.glb') },
-            { keyword: 'B', file: require('../assets/b.glb') },
-            { keyword: 'C', file: require('../assets/c.glb') },
-            { keyword: 'D', file: require('../assets/d.glb') },
-            { keyword: 'E', file: require('../assets/e.glb') },
-            { keyword: 'F', file: require('../assets/f.glb') },
-            { keyword: 'G', file: require('../assets/g.glb') },
-            { keyword: 'H', file: require('../assets/h.glb') },
-            { keyword: 'I', file: require('../assets/i.glb') },
-            { keyword: 'J', file: require('../assets/j.glb') },
-            { keyword: 'K', file: require('../assets/k.glb') },
-            { keyword: 'L', file: require('../assets/l.glb') },
-            { keyword: 'M', file: require('../assets/m.glb') },
-            { keyword: 'N', file: require('../assets/n.glb') },
-            { keyword: 'O', file: require('../assets/o.glb') },
-            { keyword: 'P', file: require('../assets/p.glb') },
-        ];
+        const assetFile = isLetter ? CUSTOM_LETTERS[keyword.toUpperCase()] : CUSTOM_ANIMATIONS[keyword.toUpperCase()];
+        if (!assetFile) return;
 
-        console.log(`[Avatar] Background-loading ${customAnimations.length} sign GLBs and ${customLetters.length} letter GLBs in parallel...`);
+        try {
+            const glbAsset = await Asset.fromModule(assetFile).downloadAsync();
+            const glbUri = glbAsset.localUri || glbAsset.uri;
+            if (glbUri) {
+                // React Native's fetch() often fails silently on local file:// URIs, 
+                // returning an empty blob. We revert strictly to FileSystem read.
+                const glbBase64 = await FileSystem.readAsStringAsync(glbUri, { encoding: 'base64' });
+                const glbBuf = Buffer.from(glbBase64, 'base64');
+                const glbArrayBuffer = glbBuf.buffer.slice(glbBuf.byteOffset, glbBuf.byteOffset + glbBuf.byteLength);
 
-        const sharedLoader = new GLTFLoader();
+                const extGLTF: any = await new Promise((resolve, reject) => {
+                    sharedLoader.parse(glbArrayBuffer, '', (gltf: any) => resolve(gltf), (err: any) => reject(err));
+                });
 
-        const loadItem = async (anim: { keyword: string, file: any }, isLetter: boolean) => {
-            try {
-                const glbAsset = await Asset.fromModule(anim.file).downloadAsync();
-                const glbUri = glbAsset.localUri || glbAsset.uri;
-                if (glbUri) {
-                    const glbBase64 = await FileSystem.readAsStringAsync(glbUri, { encoding: 'base64' });
-                    const glbBuf = Buffer.from(glbBase64, 'base64');
-                    const glbArrayBuffer = glbBuf.buffer.slice(glbBuf.byteOffset, glbBuf.byteOffset + glbBuf.byteLength);
-
-                    const extGLTF: any = await new Promise((resolve, reject) => {
-                        sharedLoader.parse(glbArrayBuffer, '', (gltf: any) => resolve(gltf), (err: any) => reject(err));
-                    });
-
-                    if (extGLTF.animations && extGLTF.animations.length > 0) {
-                        const clip = extGLTF.animations[0];
-                        // console.log(`[Avatar] BG loaded: [${anim.keyword}] Tracks: ${clip.tracks.length}`);
-                        if (isLetter) {
-                            animator.setCustomLetterAnimation(anim.keyword, clip);
-                        } else {
-                            animator.setCustomSignAnimation(anim.keyword, clip);
-                        }
+                if (extGLTF.animations && extGLTF.animations.length > 0) {
+                    const clip = extGLTF.animations[0];
+                    if (isLetter) {
+                        animator.setCustomLetterAnimation(keyword, clip);
+                    } else {
+                        animator.setCustomSignAnimation(keyword, clip);
                     }
+                    loadedAnimationsRef.current.add(cacheKey);
                 }
-            } catch (err) {
-                console.warn(`[Avatar] BG load failed for ${anim.keyword}:`, err);
             }
-        };
-
-        // 🚀 BATCHED LOADING: Loading 40+ files at once crashes the JS thread. 
-        // We process them in batches of 5 with a small rest period.
-        const allItems = [
-            ...customAnimations.map(anim => ({ item: anim, isLetter: false })),
-            ...customLetters.map(letter => ({ item: letter, isLetter: true }))
-        ];
-
-        const BATCH_SIZE = 5;
-        for (let i = 0; i < allItems.length; i += BATCH_SIZE) {
-            const batch = allItems.slice(i, i + BATCH_SIZE);
-            await Promise.all(batch.map(entry => loadItem(entry.item, entry.isLetter)));
-            
-            // Small rest period to let the main thread process UI events or model loading
-            await new Promise(resolve => setTimeout(resolve, 100));
+        } catch (err) {
+            console.warn(`[Avatar] Lazy load failed for ${keyword}:`, err);
         }
-
-        console.log('[Avatar] All background GLB animations loaded!');
-        animator.markCustomAnimationsLoaded();
     };
 
     useEffect(() => {
-        if (signToPlay && animatorRef.current && !letterToPlay) {
-            animatorRef.current.playSignAnimation(signToPlay);
-        }
+        const play = async () => {
+            if (signToPlay && animatorRef.current && !letterToPlay) {
+                await ensureAnimationLoaded(signToPlay, false, animatorRef.current);
+                animatorRef.current.playSignAnimation(signToPlay);
+            }
+        };
+        play();
     }, [signToPlay, letterToPlay]);
 
     useEffect(() => {
-        if (letterToPlay && animatorRef.current && !signToPlay) {
-            animatorRef.current.playLetterAnimation(letterToPlay);
-        }
+        const play = async () => {
+            if (letterToPlay && animatorRef.current && !signToPlay) {
+                await ensureAnimationLoaded(letterToPlay, true, animatorRef.current);
+                animatorRef.current.playLetterAnimation(letterToPlay);
+            }
+        };
+        play();
     }, [letterToPlay, signToPlay]);
 
     useEffect(() => {
-        if (sequenceToPlay && sequenceToPlay.length > 0 && animatorRef.current) {
-            animatorRef.current.playSequence(sequenceToPlay);
-        }
+        const play = async () => {
+            if (sequenceToPlay && sequenceToPlay.length > 0 && animatorRef.current) {
+                for (const item of sequenceToPlay) {
+                    await ensureAnimationLoaded(item.value, item.type === 'letter', animatorRef.current);
+                }
+                animatorRef.current.playSequence(sequenceToPlay);
+            }
+        };
+        play();
     }, [sequenceToPlay]);
 
     useEffect(() => {

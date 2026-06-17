@@ -69,12 +69,22 @@ function GlobalAvatar() {
 export default function TabLayout() {
   return (
     <AvatarProvider>
-      <View style={{ flex: 1, backgroundColor: '#0a0a0a' }}>
+      <View style={{ flex: 1, backgroundColor: '#FFF9F5' }}>
         <Tabs 
           screenOptions={{ 
             headerShown: false, 
-            tabBarStyle: { backgroundColor: '#0a0a0a', borderTopColor: '#222' }, 
-            tabBarActiveTintColor: '#00e5ff', 
+            tabBarStyle: { 
+              backgroundColor: '#FFFFFF', 
+              borderTopColor: '#EEE8FF',
+              borderTopWidth: 1.5,
+              shadowColor: '#8080B0',
+              shadowOffset: { width: 0, height: -2 },
+              shadowOpacity: 0.08,
+              shadowRadius: 8,
+              elevation: 8,
+            }, 
+            tabBarActiveTintColor: '#5BC4B5', 
+            tabBarInactiveTintColor: '#B0B0C8',
             lazy: true
           }}
         >
@@ -112,7 +122,7 @@ const styles = StyleSheet.create({
         top: 0,
         left: 0,
         right: 0,
-        height: '45%', // Set to 45% (absolute screen) to perfectly sit above the 50% (Tab screen) cyan divider!
+        height: '45%',
         backgroundColor: 'transparent',
         zIndex: 100,
     },
@@ -125,14 +135,14 @@ const styles = StyleSheet.create({
         left: 0,
         right: 0,
         bottom: 0,
-        backgroundColor: 'rgba(10, 10, 10, 0.8)',
+        backgroundColor: 'rgba(255, 249, 245, 0.85)',
         justifyContent: 'center',
         alignItems: 'center',
         zIndex: 5,
     },
     loadingText: {
-        color: '#00e5ff',
-        fontSize: 18,
+        color: '#5BC4B5',
+        fontSize: 16,
         fontWeight: 'bold',
     },
     dotPatternBackground: {
@@ -148,6 +158,6 @@ const styles = StyleSheet.create({
         width: 3,
         height: 3,
         borderRadius: 1.5,
-        backgroundColor: 'rgba(0, 229, 255, 0.15)',
+        backgroundColor: 'rgba(91, 196, 181, 0.18)',
     },
 });

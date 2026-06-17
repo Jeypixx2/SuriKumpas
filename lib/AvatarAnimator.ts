@@ -44,10 +44,6 @@ export class AvatarAnimator {
     private idleClip: THREE.AnimationClip | null = null;
     private onSequenceEnd?: () => void;
 
-    // Tracks whether custom GLB animations have finished loading
-    private customAnimationsLoaded: boolean = false;
-    // If a sequence is requested before GLBs are ready, store it here and replay it once ready
-    private pendingSequence: SequenceItem[] | null = null;
     // Increments on every new playSequence call to invalidate stale setTimeout callbacks
     private sequenceId: number = 0;
 
@@ -89,17 +85,9 @@ export class AvatarAnimator {
         console.log(`[AvatarAnimator] Custom letter animation imported for: ${letter}`);
     }
 
-    /**
-     * Injects a corrective thumb keyframe track directly into the clip.
-     * Because DeepMotion's thumb bone local axes differ from VRM's, the thumb
-     * doesn't close to the palm correctly just from remapping bone names.
-     * This method adds/replaces the rightThumbProximal rotation track with a
-     * known-good "tucked" or "extended" pose per FSL letter — no Blender editing needed.
-     */
     private injectThumbOverride(clip: THREE.AnimationClip, letter: string): void {
         if (!this.vrm) return;
         const humanoid = (this.vrm as any).humanoid;
-        // MUST match retargetClip's lookup — getRawBoneNode is needed for VRM 1.0
         const get = (name: string) =>
             humanoid.getBoneNode?.(name) ||
             humanoid.getRawBoneNode?.(name) ||
@@ -153,7 +141,7 @@ export class AvatarAnimator {
         const duration = clip.duration;
         const times = [0, duration];
         const vals = [thumbQ.x, thumbQ.y, thumbQ.z, thumbQ.w,
-                      thumbQ.x, thumbQ.y, thumbQ.z, thumbQ.w];
+        thumbQ.x, thumbQ.y, thumbQ.z, thumbQ.w];
         clip.tracks.push(new THREE.QuaternionKeyframeTrack(
             `${thumbProxR.name}.quaternion`, times, vals
         ));
@@ -166,18 +154,6 @@ export class AvatarAnimator {
                 `${thumbDistR.name}.quaternion`, times,
                 [distQ.x, distQ.y, distQ.z, distQ.w, distQ.x, distQ.y, distQ.z, distQ.w]
             ));
-        }
-    }
-
-
-    /** Called by AvatarViewer after all GLBs have finished background-loading. */
-    markCustomAnimationsLoaded(): void {
-        this.customAnimationsLoaded = true;
-        console.log('[AvatarAnimator] All custom GLBs loaded. Checking for pending sequence...');
-        if (this.pendingSequence) {
-            const seq = this.pendingSequence;
-            this.pendingSequence = null;
-            this.playSequence(seq);
         }
     }
 
@@ -376,7 +352,7 @@ export class AvatarAnimator {
 
         // ─── Wrist orientation ────────────────────────────────────────────────────────
         // Rotate each palm ~15° outward (yaw) so it faces the camera more naturally.
-        applyCorrection('leftHand',  new THREE.Quaternion().setFromEuler(new THREE.Euler(0,  0.26, 0)));
+        applyCorrection('leftHand', new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0.26, 0)));
         applyCorrection('rightHand', new THREE.Quaternion().setFromEuler(new THREE.Euler(0, -0.26, 0)));
 
         // NOTE: Thumb bones are intentionally NOT corrected here.
@@ -483,7 +459,7 @@ export class AvatarAnimator {
         if (!bones) return new THREE.AnimationClip(signName, 1, []);
 
         const { rightUpperArm, rightLowerArm, rightHand, leftUpperArm, leftLowerArm, leftHand,
-                rightThumb, rightIndex, rightMiddle, leftThumb, leftIndex, leftMiddle } = bones;
+            rightThumb, rightIndex, rightMiddle, leftThumb, leftIndex, leftMiddle } = bones;
 
         const duration = 1.5;
         const times = [0, duration * 0.3, duration * 0.6, duration];
@@ -545,53 +521,53 @@ export class AvatarAnimator {
         const isRightHanded = index % 2 === 0;
 
         if (isRightHanded) {
-            const { rightUpperArm, rightLowerArm, rightHand, 
-                    rightThumb, rightIndex, rightMiddle, rightRing, rightLittle } = bones as any;
-            
+            const { rightUpperArm, rightLowerArm, rightHand,
+                rightThumb, rightIndex, rightMiddle, rightRing, rightLittle } = bones as any;
+
             if (rightUpperArm) {
                 const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(-0.4, 0.2, 0.2));
-                tracks.push(new THREE.QuaternionKeyframeTrack(rightUpperArm.name + '.quaternion', [0, duration], [0,0,0,1, q.x, q.y, q.z, q.w]));
+                tracks.push(new THREE.QuaternionKeyframeTrack(rightUpperArm.name + '.quaternion', [0, duration], [0, 0, 0, 1, q.x, q.y, q.z, q.w]));
             }
             if (rightLowerArm) {
                 const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(0.8, 0, 0));
-                tracks.push(new THREE.QuaternionKeyframeTrack(rightLowerArm.name + '.quaternion', [0, duration], [0,0,0,1, q.x, q.y, q.z, q.w]));
+                tracks.push(new THREE.QuaternionKeyframeTrack(rightLowerArm.name + '.quaternion', [0, duration], [0, 0, 0, 1, q.x, q.y, q.z, q.w]));
             }
             if (rightHand) {
                 const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, -0.5));
-                tracks.push(new THREE.QuaternionKeyframeTrack(rightHand.name + '.quaternion', [0, duration], [0,0,0,1, q.x, q.y, q.z, q.w]));
+                tracks.push(new THREE.QuaternionKeyframeTrack(rightHand.name + '.quaternion', [0, duration], [0, 0, 0, 1, q.x, q.y, q.z, q.w]));
             }
-            
+
             // Curl all fingers slightly for a natural "ready" pose
             [rightThumb, rightIndex, rightMiddle, rightRing, rightLittle].forEach(fingerArray => {
                 fingerArray?.forEach((bone: any) => {
                     if (bone) {
                         const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(0.4, 0, 0));
-                        tracks.push(new THREE.QuaternionKeyframeTrack(bone.name + '.quaternion', [0, duration], [0,0,0,1, q.x, q.y, q.z, q.w]));
+                        tracks.push(new THREE.QuaternionKeyframeTrack(bone.name + '.quaternion', [0, duration], [0, 0, 0, 1, q.x, q.y, q.z, q.w]));
                     }
                 });
             });
         } else {
             const { leftUpperArm, leftLowerArm, leftHand,
-                    leftThumb, leftIndex, leftMiddle, leftRing, leftLittle } = bones as any;
-            
+                leftThumb, leftIndex, leftMiddle, leftRing, leftLittle } = bones as any;
+
             if (leftUpperArm) {
                 const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(-0.4, -0.2, -0.2));
-                tracks.push(new THREE.QuaternionKeyframeTrack(leftUpperArm.name + '.quaternion', [0, duration], [0,0,0,1, q.x, q.y, q.z, q.w]));
+                tracks.push(new THREE.QuaternionKeyframeTrack(leftUpperArm.name + '.quaternion', [0, duration], [0, 0, 0, 1, q.x, q.y, q.z, q.w]));
             }
             if (leftLowerArm) {
                 const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(0.8, 0, 0));
-                tracks.push(new THREE.QuaternionKeyframeTrack(leftLowerArm.name + '.quaternion', [0, duration], [0,0,0,1, q.x, q.y, q.z, q.w]));
+                tracks.push(new THREE.QuaternionKeyframeTrack(leftLowerArm.name + '.quaternion', [0, duration], [0, 0, 0, 1, q.x, q.y, q.z, q.w]));
             }
             if (leftHand) {
                 const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, 0.5));
-                tracks.push(new THREE.QuaternionKeyframeTrack(leftHand.name + '.quaternion', [0, duration], [0,0,0,1, q.x, q.y, q.z, q.w]));
+                tracks.push(new THREE.QuaternionKeyframeTrack(leftHand.name + '.quaternion', [0, duration], [0, 0, 0, 1, q.x, q.y, q.z, q.w]));
             }
 
             [leftThumb, leftIndex, leftMiddle, leftRing, leftLittle].forEach(fingerArray => {
                 fingerArray?.forEach((bone: any) => {
                     if (bone) {
                         const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(0.4, 0, 0));
-                        tracks.push(new THREE.QuaternionKeyframeTrack(bone.name + '.quaternion', [0, duration], [0,0,0,1, q.x, q.y, q.z, q.w]));
+                        tracks.push(new THREE.QuaternionKeyframeTrack(bone.name + '.quaternion', [0, duration], [0, 0, 0, 1, q.x, q.y, q.z, q.w]));
                     }
                 });
             });
@@ -613,14 +589,14 @@ export class AvatarAnimator {
             leftUpperArm: get('leftUpperArm'),
             leftLowerArm: get('leftLowerArm'),
             leftHand: get('leftHand'),
-            
+
             // All finger joints for better quality
             rightThumb: [get('rightThumbProximal'), get('rightThumbIntermediate'), get('rightThumbDistal')],
             rightIndex: [get('rightIndexProximal'), get('rightIndexIntermediate'), get('rightIndexDistal')],
             rightMiddle: [get('rightMiddleProximal'), get('rightMiddleIntermediate'), get('rightMiddleDistal')],
             rightRing: [get('rightRingProximal'), get('rightRingIntermediate'), get('rightRingDistal')],
             rightLittle: [get('rightLittleProximal'), get('rightLittleIntermediate'), get('rightLittleDistal')],
-            
+
             leftThumb: [get('leftThumbProximal'), get('leftThumbIntermediate'), get('leftThumbDistal')],
             leftIndex: [get('leftIndexProximal'), get('leftIndexIntermediate'), get('leftIndexDistal')],
             leftMiddle: [get('leftMiddleProximal'), get('leftMiddleIntermediate'), get('leftMiddleDistal')],
@@ -730,13 +706,6 @@ export class AvatarAnimator {
      * Simple recursive process to avoid async lag.
      */
     playSequence(sequence: SequenceItem[]): void {
-        // If custom GLBs haven't loaded yet, park the request and replay it when they arrive
-        if (!this.customAnimationsLoaded) {
-            console.log('[AvatarAnimator] GLBs not ready yet — queuing sequence for later.');
-            this.pendingSequence = [...sequence];
-            return;
-        }
-
         // Bump the ID to invalidate any stale setTimeout callbacks from previous animations
         this.sequenceId++;
         const myId = this.sequenceId;
@@ -746,7 +715,7 @@ export class AvatarAnimator {
         // Instead, we let processNextInQueue handle the smooth crossfade from the previous state.
         this.queue = [...sequence];
         this.isProcessingQueue = false;
-        
+
         this.processNextInQueue(myId);
     }
 
@@ -799,7 +768,7 @@ export class AvatarAnimator {
         const nextAction = this.mixer.clipAction(clip);
         nextAction.setLoop(THREE.LoopOnce, 1);
         nextAction.clampWhenFinished = true;
-        
+
         // 🚀 BONE RESET: If we are transitioning from a fingerspelling letter (curled fingers) 
         // to a sign that might not have finger tracks, we MUST ensure the bones reset.
         this.resetFingers();

@@ -51,7 +51,6 @@ export default function TranslateScreen() {
     const onSpeechError = useCallback((e: SpeechErrorEvent) => {
         console.warn('Speech error:', e.error);
         
-        // Error 7 is "No match" - just means silence. Don't complain to user.
         if (e.error && (e.error as any).code === '7') {
            setIsListening(false);
            return;
@@ -69,7 +68,6 @@ export default function TranslateScreen() {
     }, []);
 
     useEffect(() => {
-        // Re-register listeners every time the callbacks update (avoids stale closures)
         Voice.onSpeechResults = onSpeechResults;
         Voice.onSpeechError = onSpeechError;
     }, [onSpeechResults, onSpeechError]);
@@ -113,7 +111,6 @@ export default function TranslateScreen() {
                 setSequenceToPlay(null);
                 setSignToPlay(null);
                 setLetterToPlay(null);
-                // ALWAYS enforce en-US on OEM devices to prevent Error 11 language pack rejects
                 await Voice.start('en-US'); 
                 setIsListening(true);
             } catch (error) {
@@ -130,20 +127,25 @@ export default function TranslateScreen() {
                     style={styles.backButton}
                     onPress={() => router.back()}
                 >
-                    <MaterialIcons name="arrow-back" size={28} color="#ffffff" />
+                    <MaterialIcons name="arrow-back" size={22} color="#2D3561" />
                 </TouchableOpacity>
             </View>
 
             <View style={styles.bottomHalf}>
                 <View style={styles.textContainer}>
                     {recognizedText ? (
-                        <Text style={styles.recognizedText}>
-                            "{recognizedText}"
-                        </Text>
+                        <View style={styles.recognizedCard}>
+                            <Text style={styles.recognizedText}>
+                                "{recognizedText}"
+                            </Text>
+                        </View>
                     ) : null}
 
                     {errorMessage ? (
-                        <Text style={styles.errorText}>{errorMessage}</Text>
+                        <View style={styles.errorCard}>
+                            <MaterialIcons name="error-outline" size={18} color="#E57373" style={{ marginRight: 6 }} />
+                            <Text style={styles.errorText}>{errorMessage}</Text>
+                        </View>
                     ) : null}
 
 
@@ -170,7 +172,7 @@ export default function TranslateScreen() {
                         size={100}
                     />
                     <Text style={styles.micHint}>
-                        {isListening ? 'Listening...' : 'Tap to speak'}
+                        {isListening ? 'LISTENING...' : 'TAP TO SPEAK'}
                     </Text>
                 </View>
 
@@ -181,7 +183,6 @@ export default function TranslateScreen() {
                             style={[
                                 styles.bgDot,
                                 {
-                                    // Use absolute numbers similar to detect layout
                                     left: (i % 5) * 80 + 20,
                                     top: Math.floor(i / 5) * 80 + 20
                                 }
@@ -203,17 +204,22 @@ const styles = StyleSheet.create({
         height: '50%',
         width: '100%',
         position: 'relative',
-        backgroundColor: '#0a0a0a', // Solid dark background to hide any native Tab artifacting!
+        backgroundColor: '#F5F5FF',
     },
     bottomHalf: {
         height: '50%',
         width: '100%',
-        backgroundColor: '#111111',
+        backgroundColor: '#FAFAFE',
         alignItems: 'center',
         borderTopWidth: 2,
-        borderTopColor: '#00e5ff',
+        borderTopColor: '#C9B8F0',
         position: 'relative',
         overflow: 'hidden',
+        shadowColor: '#9575CD',
+        shadowOffset: { width: 0, height: -3 },
+        shadowOpacity: 0.12,
+        shadowRadius: 12,
+        elevation: 10,
     },
     backButton: {
         position: 'absolute',
@@ -222,10 +228,17 @@ const styles = StyleSheet.create({
         width: 44,
         height: 44,
         borderRadius: 22,
-        backgroundColor: 'rgba(0, 0, 0, 0.5)',
+        backgroundColor: 'rgba(255, 255, 255, 0.9)',
         alignItems: 'center',
         justifyContent: 'center',
         zIndex: 10,
+        borderWidth: 1.5,
+        borderColor: '#C9B8F0',
+        shadowColor: '#9575CD',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.15,
+        shadowRadius: 6,
+        elevation: 4,
     },
     dotPatternBackground: {
         position: 'absolute',
@@ -238,74 +251,115 @@ const styles = StyleSheet.create({
     },
     bgDot: {
         position: 'absolute',
-        width: 2,
-        height: 2,
-        borderRadius: 1,
-        backgroundColor: 'rgba(0, 229, 255, 0.1)',
+        width: 3,
+        height: 3,
+        borderRadius: 1.5,
+        backgroundColor: 'rgba(126, 87, 194, 0.12)',
     },
     textContainer: {
         position: 'absolute',
-        top: 30, // Position text near the top of the bottom half
+        top: 24,
         left: 20,
         right: 20,
         alignItems: 'center',
         zIndex: 5,
     },
+    recognizedCard: {
+        backgroundColor: '#FFFFFF',
+        borderWidth: 1.5,
+        borderColor: '#C9B8F0',
+        borderRadius: 18,
+        paddingHorizontal: 20,
+        paddingVertical: 14,
+        width: '100%',
+        alignItems: 'center',
+        justifyContent: 'center',
+        shadowColor: '#9575CD',
+        shadowOffset: { width: 0, height: 3 },
+        shadowOpacity: 0.1,
+        shadowRadius: 8,
+        elevation: 3,
+    },
     recognizedText: {
-        color: '#ffffff',
-        fontSize: 18,
+        color: '#2D3561',
+        fontSize: 15,
         textAlign: 'center',
-        fontStyle: 'italic',
+        fontWeight: '600',
+        lineHeight: 22,
+    },
+    errorCard: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#FFF0F0',
+        borderWidth: 1.5,
+        borderColor: '#FFCCCC',
+        borderRadius: 14,
+        paddingHorizontal: 16,
+        paddingVertical: 10,
+        width: '100%',
+        justifyContent: 'center',
+        marginTop: 8,
     },
     errorText: {
-        color: '#ff4444',
-        fontSize: 16,
+        color: '#E57373',
+        fontSize: 13,
+        fontWeight: '600',
         textAlign: 'center',
-        marginTop: 10,
     },
     micContainer: {
         position: 'absolute',
-        bottom: 50,
+        bottom: 36,
         left: 0,
         right: 0,
         alignItems: 'center',
+        zIndex: 5,
     },
     micHint: {
-        color: '#888888',
-        fontSize: 14,
-        marginTop: 15,
+        color: '#B0B0C8',
+        fontSize: 11,
+        fontWeight: 'bold',
+        letterSpacing: 1.5,
+        marginTop: 16,
     },
     sequenceContainer: {
         flexDirection: 'row',
         flexWrap: 'wrap',
         justifyContent: 'center',
-        marginTop: 15,
+        marginTop: 12,
         gap: 8,
     },
     sequenceBadge: {
-        backgroundColor: 'rgba(0, 229, 255, 0.15)',
-        paddingHorizontal: 12,
-        paddingVertical: 6,
-        borderRadius: 12,
-        borderWidth: 1,
-        borderColor: 'rgba(0, 229, 255, 0.5)',
+        backgroundColor: '#F0EDFB',
+        paddingHorizontal: 14,
+        paddingVertical: 7,
+        borderRadius: 14,
+        borderWidth: 1.5,
+        borderColor: '#C9B8F0',
+        shadowColor: '#9575CD',
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.08,
+        shadowRadius: 4,
+        elevation: 2,
     },
     sequenceText: {
-        color: '#00e5ff',
-        fontSize: 12,
-        fontWeight: 'bold',
+        color: '#5E35B1',
+        fontSize: 11,
+        fontWeight: '900',
+        letterSpacing: 0.4,
     },
     moreText: {
-        color: '#888888',
-        fontSize: 12,
+        color: '#B0B0C8',
+        fontSize: 11,
+        fontWeight: '600',
         alignSelf: 'center',
+        marginLeft: 4,
     },
     debugInfo: {
         marginTop: 5,
         opacity: 0.6,
     },
     debugText: {
-        color: '#00e5ff',
+        color: '#9575CD',
         fontSize: 10,
         fontFamily: 'monospace',
     },

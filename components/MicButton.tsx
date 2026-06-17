@@ -1,4 +1,4 @@
-import React, { useCallback } from 'react';
+import React, { useCallback, useRef, useEffect } from 'react';
 import { StyleSheet, TouchableOpacity, View, Animated } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 
@@ -9,15 +9,20 @@ interface MicButtonProps {
 }
 
 export default function MicButton({ onPress, isListening = false, size = 100 }: MicButtonProps) {
-    const pulseAnim = new Animated.Value(1);
-    const glowAnim = new Animated.Value(0);
+    const pulseAnim = useRef(new Animated.Value(1)).current;
+    const ripple1 = useRef(new Animated.Value(0)).current;
+    const ripple2 = useRef(new Animated.Value(0)).current;
 
-    React.useEffect(() => {
+    useEffect(() => {
+        let pulseLoop: Animated.CompositeAnimation | null = null;
+        let ripple1Loop: Animated.CompositeAnimation | null = null;
+        let ripple2Loop: Animated.CompositeAnimation | null = null;
+
         if (isListening) {
-            Animated.loop(
+            pulseLoop = Animated.loop(
                 Animated.sequence([
                     Animated.timing(pulseAnim, {
-                        toValue: 1.2,
+                        toValue: 1.12,
                         duration: 800,
                         useNativeDriver: true,
                     }),
@@ -27,77 +32,133 @@ export default function MicButton({ onPress, isListening = false, size = 100 }: 
                         useNativeDriver: true,
                     }),
                 ])
-            ).start();
+            );
+            pulseLoop.start();
 
-            Animated.loop(
+            ripple1.setValue(0);
+            ripple1Loop = Animated.loop(
+                Animated.timing(ripple1, {
+                    toValue: 1,
+                    duration: 2000,
+                    useNativeDriver: true,
+                })
+            );
+            ripple1Loop.start();
+
+            ripple2.setValue(0);
+            ripple2Loop = Animated.loop(
                 Animated.sequence([
-                    Animated.timing(glowAnim, {
+                    Animated.delay(1000),
+                    Animated.timing(ripple2, {
                         toValue: 1,
-                        duration: 500,
+                        duration: 2000,
                         useNativeDriver: true,
-                    }),
-                    Animated.timing(glowAnim, {
-                        toValue: 0,
-                        duration: 500,
-                        useNativeDriver: true,
-                    }),
+                    })
                 ])
-            ).start();
+            );
+            ripple2Loop.start();
         } else {
             pulseAnim.setValue(1);
-            glowAnim.setValue(0);
+            ripple1.setValue(0);
+            ripple2.setValue(0);
         }
+
+        return () => {
+            pulseLoop?.stop();
+            ripple1Loop?.stop();
+            ripple2Loop?.stop();
+        };
     }, [isListening]);
 
     const handlePress = useCallback(() => {
         onPress?.();
     }, [onPress]);
 
-    const glowOpacity = glowAnim.interpolate({
+    const r1Scale = ripple1.interpolate({
         inputRange: [0, 1],
-        outputRange: [0.3, 0.8],
+        outputRange: [1, 2.0],
+    });
+    const r1Opacity = ripple1.interpolate({
+        inputRange: [0, 0.5, 1],
+        outputRange: [0.5, 0.25, 0],
+    });
+
+    const r2Scale = ripple2.interpolate({
+        inputRange: [0, 1],
+        outputRange: [1, 2.6],
+    });
+    const r2Opacity = ripple2.interpolate({
+        inputRange: [0, 0.5, 1],
+        outputRange: [0.4, 0.18, 0],
     });
 
     return (
         <View style={styles.container}>
             {isListening && (
-                <Animated.View
-                    style={[
-                        styles.glow,
-                        {
-                            width: size * 2,
-                            height: size * 2,
-                            borderRadius: size,
-                            opacity: glowOpacity,
-                        },
-                    ]}
-                />
+                <>
+                    <Animated.View
+                        style={[
+                            styles.ripple,
+                            {
+                                width: size,
+                                height: size,
+                                borderRadius: size / 2,
+                                transform: [{ scale: r1Scale }],
+                                opacity: r1Opacity,
+                            },
+                        ]}
+                    />
+                    <Animated.View
+                        style={[
+                            styles.ripple,
+                            {
+                                width: size,
+                                height: size,
+                                borderRadius: size / 2,
+                                transform: [{ scale: r2Scale }],
+                                opacity: r2Opacity,
+                            },
+                        ]}
+                    />
+                </>
             )}
-            <TouchableOpacity
-                onPress={handlePress}
-                activeOpacity={0.8}
+
+            <Animated.View
                 style={[
-                    styles.button,
+                    styles.buttonShadow,
+                    isListening && styles.buttonShadowActive,
                     {
                         width: size,
                         height: size,
                         borderRadius: size / 2,
-                        backgroundColor: isListening ? '#00e5ff' : '#ffffff',
-                    },
-                ]}
-            >
-                <Animated.View
-                    style={{
                         transform: [{ scale: pulseAnim }],
-                    }}
+                    }
+                ]}
+            />
+
+            <Animated.View style={{ transform: [{ scale: pulseAnim }] }}>
+                <TouchableOpacity
+                    onPress={handlePress}
+                    activeOpacity={0.85}
+                    style={[
+                        styles.button,
+                        {
+                            width: size,
+                            height: size,
+                            borderRadius: size / 2,
+                            backgroundColor: isListening ? '#7E57C2' : '#FFFFFF',
+                            borderColor: isListening ? '#7E57C2' : '#C9B8F0',
+                            borderWidth: 2,
+                        },
+                    ]}
                 >
                     <MaterialIcons
                         name={isListening ? 'mic' : 'mic-none'}
-                        size={size * 0.5}
-                        color={isListening ? '#0a0a0a' : '#00e5ff'}
+                        size={size * 0.44}
+                        color={isListening ? '#ffffff' : '#7E57C2'} 
                     />
-                </Animated.View>
-            </TouchableOpacity>
+                </TouchableOpacity>
+            </Animated.View>
         </View>
     );
 }
@@ -106,18 +167,33 @@ const styles = StyleSheet.create({
     container: {
         alignItems: 'center',
         justifyContent: 'center',
+        position: 'relative',
     },
-    glow: {
+    ripple: {
         position: 'absolute',
-        backgroundColor: '#00e5ff',
+        backgroundColor: '#C9B8F0',
+        borderWidth: 1,
+        borderColor: 'rgba(126, 87, 194, 0.5)',
+    },
+    buttonShadow: {
+        position: 'absolute',
+        backgroundColor: 'transparent',
+    },
+    buttonShadowActive: {
+        backgroundColor: 'rgba(126, 87, 194, 0.2)',
+        shadowColor: '#7E57C2',
+        shadowOffset: { width: 0, height: 0 },
+        shadowOpacity: 0.5,
+        shadowRadius: 18,
+        elevation: 8,
     },
     button: {
         alignItems: 'center',
         justifyContent: 'center',
-        shadowColor: '#00e5ff',
-        shadowOffset: { width: 0, height: 0 },
-        shadowOpacity: 0.5,
-        shadowRadius: 20,
-        elevation: 10,
+        shadowColor: '#9575CD',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.2,
+        shadowRadius: 8,
+        elevation: 5,
     },
 });
