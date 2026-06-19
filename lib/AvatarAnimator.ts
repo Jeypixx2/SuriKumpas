@@ -323,6 +323,46 @@ export class AvatarAnimator {
     }
 
     /**
+     * Corrects upper-arm and lower-arm bone rotations after retargeting.
+     *
+     * The recording skeleton (source of the GLB animations) uses an A-pose rest
+     * (arms angled ~45° downward from horizontal). VRoid Studio 2.x exports avatars
+     * in T-pose (arms fully horizontal). Because retargeting copies the LOCAL rotations
+     * directly, the same values applied to a T-pose skeleton produce arms that are ~45°
+     * too high. This function premultiplies each upper-arm keyframe with a correction
+     * quaternion that offsets this rest-pose difference.
+     */
+    private normalizeTposeArms(clip: THREE.AnimationClip): void {
+        if (!this.vrm) return;
+        const humanoid = (this.vrm as any).humanoid;
+        const get = (name: string) => humanoid.getBoneNode?.(name) || humanoid.humanBones?.[name]?.node;
+
+        const applyCorrection = (boneName: string, correction: THREE.Quaternion): void => {
+            const boneNode = get(boneName);
+            if (!boneNode) return;
+            const track = clip.tracks.find(t => t.name === `${boneNode.name}.quaternion`) as THREE.QuaternionKeyframeTrack | undefined;
+            if (!track) return;
+            const v = track.values;
+            for (let i = 0; i < v.length; i += 4) {
+                const q = new THREE.Quaternion(v[i], v[i + 1], v[i + 2], v[i + 3]);
+                q.premultiply(correction);
+                v[i] = q.x; v[i + 1] = q.y; v[i + 2] = q.z; v[i + 3] = q.w;
+            }
+        };
+
+        // Upper arms: rotate down ~45° from T-pose to match A-pose rest position
+        // In VRoid bone local space, Z-axis controls the arm's up/down angle.
+        // Left upper arm: positive Z rotates arm down (toward body)
+        // Right upper arm: negative Z rotates arm down (toward body)
+        applyCorrection('leftUpperArm',  new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0,  0.75)));
+        applyCorrection('rightUpperArm', new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, -0.75)));
+
+        // Lower arms: small correction to prevent hyperextension when arm is raised
+        applyCorrection('leftLowerArm',  new THREE.Quaternion().setFromEuler(new THREE.Euler(0.2, 0, 0)));
+        applyCorrection('rightLowerArm', new THREE.Quaternion().setFromEuler(new THREE.Euler(0.2, 0, 0)));
+    }
+
+    /**
      * Corrects wrist bone rotations after retargeting.
      *
      * DeepMotion/Blender exports the wrist (hand) bone with the palm facing inward
@@ -635,7 +675,6 @@ export class AvatarAnimator {
             const x = (pseudoRandom(i) - 0.5) * 1.5;
             const y = (pseudoRandom(i + 100) - 0.5) * 1.2 + (variation % 2 === 0 ? 0.3 : -0.2);
             const z = (pseudoRandom(i + 200) - 0.5) * 1.0;
-            const w = 1.0;
 
             const q = new THREE.Quaternion();
             const euler = new THREE.Euler(x, y, z);
@@ -656,7 +695,6 @@ export class AvatarAnimator {
             const x = (pseudoRandom(i) - 0.5) * 0.8;
             const y = (pseudoRandom(i + 100) - 0.5) * 0.8;
             const z = (pseudoRandom(i + 200) - 0.5) * 1.5;
-            const w = 1.0;
 
             const q = new THREE.Quaternion();
             const euler = new THREE.Euler(x, y, z);
@@ -679,7 +717,6 @@ export class AvatarAnimator {
             const x = (pseudoRandom(i) - 0.5) * range;
             const y = (pseudoRandom(i + 100) - 0.5) * range;
             const z = (pseudoRandom(i + 200) - 0.5) * range;
-            const w = 1.0;
 
             const q = new THREE.Quaternion();
             const euler = new THREE.Euler(x, y, z);

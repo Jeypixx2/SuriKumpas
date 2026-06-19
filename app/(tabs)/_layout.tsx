@@ -7,7 +7,7 @@ import AvatarViewer from '../../components/AvatarViewer';
 
 function GlobalAvatar() {
   const segments = useSegments();
-  const isTranslate = segments[segments.length - 1] === 'translate';
+  const isTranslate = segments.includes('translate');
   const { 
     signToPlay, setSignToPlay,
     letterToPlay, setLetterToPlay,

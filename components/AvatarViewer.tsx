@@ -320,7 +320,12 @@ export default function AvatarViewer({
                     (gltf: any) => {
                         console.log('[Avatar] GLTFLoader.parse successful');
                         const vrm = gltf.userData.vrm as VRM;
-                        VRMUtils.removeUnnecessaryVertices(vrm.scene);
+                        // Disable frustum culling to prevent the avatar from disappearing if bounding boxes are inaccurate
+                        vrm.scene.traverse((obj: any) => {
+                            if (obj.isMesh) {
+                                obj.frustumCulled = false;
+                            }
+                        });
                         resolve(vrm);
                     },
                     (error: any) => {
