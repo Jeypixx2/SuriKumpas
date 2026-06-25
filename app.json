@@ -51,7 +51,7 @@
           "assets": [
             "./assets/fsl_model.tflite",
             "./assets/alphabet_model.tflite",
-            "./assets/avatar.vrm"
+            "./assets/avatar3.vrm"
           ]
         }
       ],

@@ -160,7 +160,7 @@ export default function AvatarViewer({
     letterToPlay,
     sequenceToPlay,
     onSequenceEnd,
-    avatarUri = './avatar.vrm',
+    avatarUri = './avatar3.vrm',
     active = true
 }: AvatarViewerProps) {
     const glRef = useRef<ExpoWebGLRenderingContext | null>(null);
@@ -210,10 +210,12 @@ export default function AvatarViewer({
 
             // The alpha parameter ensures the WebGL context is transparent
             const renderer = new Renderer({ gl, alpha: true } as any);
-            renderer.setSize(gl.drawingBufferWidth, gl.drawingBufferHeight);
-            renderer.setClearColor(0x000000, 0); // Transparent WebGL background!
-            renderer.outputColorSpace = THREE.SRGBColorSpace;
-            rendererRef.current = renderer;
+renderer.setSize(gl.drawingBufferWidth, gl.drawingBufferHeight);
+renderer.setClearColor(0x000000, 0); // Transparent WebGL background!
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;   // ← ADD
+renderer.toneMappingExposure = 1.2;                    // ← ADD
+rendererRef.current = renderer;
 
             const scene = new THREE.Scene();
             sceneRef.current = scene;
@@ -228,14 +230,15 @@ export default function AvatarViewer({
             camera.lookAt(0, 1.35, 0); // Focus on the upper chest
             cameraRef.current = camera;
 
-            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            const ambientLight = new THREE.AmbientLight(0xffffff, 1.2); // Boosted ambient light for standard glTF
             scene.add(ambientLight);
 
-            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
-            directionalLight.position.set(1, 2, 2);
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 1.0); // Boosted main light
+            directionalLight.position.set(1, 2, 1.5);
             scene.add(directionalLight);
 
-            const fillLight = new THREE.DirectionalLight(0x00e5ff, 0.3);
+            // Replaced ghostly cyan side light with soft warm fill light
+            const fillLight = new THREE.DirectionalLight(0xfffaed, 0.4);
             fillLight.position.set(-1, 1, 1);
             scene.add(fillLight);
 
@@ -291,13 +294,13 @@ export default function AvatarViewer({
     const loadVRM = async (scene: THREE.Scene) => {
         console.log('[Avatar] Starting loadVRM...');
         try {
-            console.log('[Avatar] Requiring asset...');
-            const asset = await Asset.fromModule(require('../assets/avatar.vrm')).downloadAsync();
+            console.log('[Avatar] Requiring hello.glb asset...');
+            const asset = await Asset.fromModule(require('../assets/hello.glb')).downloadAsync();
             console.log('[Avatar] Asset downloaded successfully.');
             const uri = asset.localUri || asset.uri;
 
             if (!uri) {
-                throw new Error('Could not resolve VRM asset URI');
+                throw new Error('Could not resolve GLB asset URI');
             }
 
             console.log('[Avatar] Reading FileSystem...');
@@ -309,7 +312,7 @@ export default function AvatarViewer({
             const buf = Buffer.from(fileBase64, 'base64');
             const arrayBuffer = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
 
-            const vrm = await new Promise<VRM>((resolve, reject) => {
+            const vrm = await new Promise<any>((resolve, reject) => {
                 const loader = new GLTFLoader();
                 loader.register((parser: any) => new VRMLoaderPlugin(parser));
 
@@ -319,14 +322,36 @@ export default function AvatarViewer({
                     '',
                     (gltf: any) => {
                         console.log('[Avatar] GLTFLoader.parse successful');
-                        const vrm = gltf.userData.vrm as VRM;
-                        // Disable frustum culling to prevent the avatar from disappearing if bounding boxes are inaccurate
-                        vrm.scene.traverse((obj: any) => {
-                            if (obj.isMesh) {
-                                obj.frustumCulled = false;
-                            }
-                        });
-                        resolve(vrm);
+                        let parsedVrm = gltf.userData.vrm;
+                        const isStandardGltf = !parsedVrm;
+                        if (!parsedVrm) {
+                            // Standard GLTF/GLB avatar model fallback
+                            parsedVrm = gltf;
+                        }
+                        // Disable frustum culling and optimize materials/double-sided rendering
+                        parsedVrm.scene.traverse((obj: any) => {
+    if (obj.isMesh) {
+        obj.frustumCulled = false;
+        
+        if (isStandardGltf && obj.material) {
+            const materials = Array.isArray(obj.material) ? obj.material : [obj.material];
+            materials.forEach((mat: any) => {
+                if (mat.isMeshStandardMaterial) {
+                    mat.metalness = 0.0;
+                    mat.roughness = 0.8;
+                }
+                mat.side = THREE.DoubleSide;
+                if (mat.map) {
+                    mat.map.colorSpace = THREE.SRGBColorSpace;
+                }
+                if (mat.emissiveMap) {                          // ← ADD
+                    mat.emissiveMap.colorSpace = THREE.SRGBColorSpace;  // ← ADD
+                }
+            });
+        }
+    }
+});
+                        resolve(parsedVrm);
                     },
                     (error: any) => {
                         console.error('[Avatar] GLTFLoader parse error:', error);
@@ -336,6 +361,11 @@ export default function AvatarViewer({
             });
 
             vrmRef.current = vrm;
+            if (vrm.humanoid) {
+                vrm.scene.rotation.y = Math.PI; // Face the camera for VRM
+            } else {
+                vrm.scene.rotation.y = 0; // Face the camera for standard GLTF
+            }
             scene.add(vrm.scene);
 
             const animator = new AvatarAnimator();
@@ -346,8 +376,20 @@ export default function AvatarViewer({
             animator.setVRM(vrm);
             animatorRef.current = animator;
 
+            // Automatically import any animations embedded inside the main avatar model itself
+            if (vrm.animations && vrm.animations.length > 0) {
+                vrm.animations.forEach((clip: THREE.AnimationClip) => {
+                    const clipName = clip.name.toUpperCase();
+                    if (clipName === 'ARMATUREACTION' || clipName === 'HELLO') {
+                        animator.setCustomSignAnimation('HELLO', clip);
+                        loadedAnimationsRef.current.add('sign_HELLO');
+                        console.log('[Avatar] Automatically registered embedded HELLO animation');
+                    }
+                });
+            }
+
             // 🚀 Show the avatar IMMEDIATELY — don't wait for GLBs
-            console.log('[Avatar] VRM loaded. Showing avatar instantly...');
+            console.log('[Avatar] Avatar loaded. Showing avatar instantly...');
             onVRMLoaded?.();
 
             const playInitial = async () => {
@@ -367,7 +409,7 @@ export default function AvatarViewer({
             playInitial();
 
         } catch (error) {
-            console.error('Error loading VRM:', error);
+            console.error('Error loading avatar:', error);
             onError?.(error instanceof Error ? error : new Error(String(error)));
         }
     };
@@ -448,7 +490,23 @@ export default function AvatarViewer({
             animatorRef.current?.dispose();
             rendererRef.current?.dispose();
             if (vrmRef.current) {
-                VRMUtils.deepDispose(vrmRef.current.scene);
+                if ((vrmRef.current as any).humanoid) {
+                    VRMUtils.deepDispose(vrmRef.current.scene);
+                } else {
+                    // Standard GLTF resources disposal
+                    vrmRef.current.scene.traverse((obj: any) => {
+                        if (obj.geometry) {
+                            obj.geometry.dispose();
+                        }
+                        if (obj.material) {
+                            if (Array.isArray(obj.material)) {
+                                obj.material.forEach((m: any) => m.dispose());
+                            } else {
+                                obj.material.dispose();
+                            }
+                        }
+                    });
+                }
             }
         };
     }, []);

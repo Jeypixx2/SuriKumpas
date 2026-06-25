@@ -298,9 +298,10 @@ const CameraProcessor = forwardRef<CameraProcessorRef, CameraProcessorProps>(
                     allowFileAccessFromFileURLs={true}
                     allowUniversalAccessFromFileURLs={true}
                     mediaCapturePermissionGrantType="grant"
-                    // @ts-ignore: Prop may not be exposed in local library typings
-                    onPermissionRequest={(event: any) => {
-                        event.grant();
+                    {...{
+                        onPermissionRequest: (event: any) => {
+                            event.grant();
+                        }
                     }}
                     onError={(syntheticEvent) => {
                         const { nativeEvent } = syntheticEvent;
