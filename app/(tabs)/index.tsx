@@ -1,13 +1,15 @@
-import { StyleSheet, Text, View, ScrollView, TouchableOpacity, Image, Animated, Pressable } from 'react-native';
+import { StyleSheet, Text, View, ScrollView, TouchableOpacity, Animated, Pressable, FlatList, InteractionManager } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { FSL_LABELS, FSLLabel } from '../../lib/labels';
-import { useState, useMemo, useEffect, useRef } from 'react';
-import LoadingScreen from '../../components/LoadingScreen';
+import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { globalClassifier } from '../../lib/SignClassifier';
-import { useAvatarContext } from '../../lib/AvatarContext';
 
 const CATEGORIES = Array.from(new Set(FSL_LABELS.map(l => l.category)));
+
+type LabelListItem =
+    | { type: 'header'; category: string }
+    | { type: 'label'; category: string; label: FSLLabel };
 
 const CATEGORY_COLORS: Record<string, string> = {
     GREETING:     '#5BC4B5',
@@ -22,89 +24,33 @@ const CATEGORY_COLORS: Record<string, string> = {
     DRINK:        '#26A69A',
 };
 
-type LoadingStatus = 'pending' | 'loading' | 'complete' | 'error';
-
-interface LoadingStep {
-    label: string;
-    status: LoadingStatus;
-}
-
 export default function HomeScreen() {
     const router = useRouter();
-    const { isAvatarLoaded } = useAvatarContext();
     const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
-    const [isLoading, setIsLoading] = useState(true);
-    const [hasError, setHasError] = useState(false);
-    const [currentStep, setCurrentStep] = useState(0);
-    const [modelsLoaded, setModelsLoaded] = useState(false);
-    const [steps, setSteps] = useState<LoadingStep[]>([
-        { label: 'Loading FSL Model...', status: 'pending' },
-        { label: 'Loading Alphabet Model...', status: 'pending' },
-        { label: 'Loading Avatar...', status: 'pending' },
-    ]);
 
     const detectScale = useRef(new Animated.Value(1)).current;
     const translateScale = useRef(new Animated.Value(1)).current;
-    const listOpacity = useRef(new Animated.Value(0)).current;
-
-    const loadAll = async () => {
-        setHasError(false);
-        setIsLoading(true);
-        try {
-            updateStep(0, 'loading');
-            updateStep(1, 'loading');
-
-            await Promise.all([
-                globalClassifier.loadFSLModel().then(() => {
-                    updateStep(0, 'complete');
-                }),
-                globalClassifier.loadAlphabetModel().then(() => {
-                    updateStep(1, 'complete');
-                })
-            ]);
-
-            setModelsLoaded(true);
-            setCurrentStep(2);
-            updateStep(2, 'loading');
-        } catch (error) {
-            console.error('Loading error:', error);
-            setSteps(prev => prev.map((step, idx) => {
-                if (idx < 2 && step.status === 'loading') {
-                    return { ...step, status: 'error' };
-                }
-                return step;
-            }));
-            setHasError(true);
-        }
-    };
+    const listOpacity = useRef(new Animated.Value(1)).current;
 
     useEffect(() => {
-        loadAll();
+        const timer = setTimeout(() => {
+            InteractionManager.runAfterInteractions(() => {
+                Promise.allSettled([
+                    globalClassifier.loadFSLModel(),
+                    globalClassifier.loadAlphabetModel(),
+                ]).then(results => {
+                    results.forEach((result, index) => {
+                        if (result.status === 'rejected') {
+                            const modelName = index === 0 ? 'FSL' : 'Alphabet';
+                            console.warn(`[Home] Background ${modelName} model preload failed:`, result.reason);
+                        }
+                    });
+                });
+            });
+        }, 2500);
+
+        return () => clearTimeout(timer);
     }, []);
-
-    useEffect(() => {
-        if (modelsLoaded && isAvatarLoaded) {
-            const finishLoading = async () => {
-                updateStep(2, 'complete');
-                await new Promise(resolve => setTimeout(resolve, 250));
-                setIsLoading(false);
-                Animated.timing(listOpacity, {
-                    toValue: 1,
-                    duration: 500,
-                    useNativeDriver: true,
-                }).start();
-            };
-            finishLoading();
-        }
-    }, [modelsLoaded, isAvatarLoaded]);
-
-    const updateStep = (index: number, status: LoadingStatus) => {
-        setSteps(prev => {
-            const newSteps = [...prev];
-            newSteps[index] = { ...newSteps[index], status };
-            return newSteps;
-        });
-    };
 
     const animateButtonPress = (scaleVar: Animated.Value, toValue: number) => {
         Animated.spring(scaleVar, {
@@ -129,23 +75,43 @@ export default function HomeScreen() {
         return groups;
     }, [filteredLabels]);
 
-    if (isLoading) {
+    const listData = useMemo<LabelListItem[]>(() => {
+        const items: LabelListItem[] = [];
+        Object.entries(groupedLabels).forEach(([category, labels]) => {
+            items.push({ type: 'header', category });
+            labels.forEach(label => items.push({ type: 'label', category, label }));
+        });
+        return items;
+    }, [groupedLabels]);
+
+    const renderLabelItem = useCallback(({ item }: { item: LabelListItem }) => {
+        const accentColor = CATEGORY_COLORS[item.category] || '#5BC4B5';
+
+        if (item.type === 'header') {
+            return (
+                <Text style={[styles.categoryHeader, { color: accentColor }]}>
+                    {item.category}
+                </Text>
+            );
+        }
+
         return (
-            <View style={styles.loadingContainer}>
-                <LoadingScreen steps={steps} currentStep={currentStep} />
-                {hasError && (
-                    <View style={styles.errorRecoveryContainer}>
-                        <TouchableOpacity style={styles.retryButton} onPress={loadAll}>
-                            <Text style={styles.retryButtonText}>Retry Loading</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity style={styles.proceedButton} onPress={() => setIsLoading(false)}>
-                            <Text style={styles.proceedButtonText}>Proceed Anyway</Text>
-                        </TouchableOpacity>
-                    </View>
-                )}
+            <View style={styles.labelCard}>
+                <View style={[styles.cardIndicator, { backgroundColor: accentColor }]} />
+                <View style={styles.labelContent}>
+                    <Text style={styles.labelEnglish}>{item.label.english}</Text>
+                    <Text style={styles.labelFilipino}>{item.label.filipino}</Text>
+                </View>
+                <View style={[styles.cardIconBox, { backgroundColor: accentColor + '22' }]}>
+                    <MaterialIcons name="sign-language" size={20} color={accentColor} />
+                </View>
             </View>
         );
-    }
+    }, []);
+
+    const keyExtractor = useCallback((item: LabelListItem) => {
+        return item.type === 'header' ? `header-${item.category}` : `label-${item.label.id}`;
+    }, []);
 
     return (
         <View style={styles.container}>
@@ -153,7 +119,7 @@ export default function HomeScreen() {
                 {/* Header Section */}
                 <View style={styles.header}>
                     <View style={styles.logoRing}>
-                        <Image source={require('../../assets/adaptive-icon.png')} style={styles.logoSmall} resizeMode="contain" />
+                        <MaterialIcons name="sign-language" size={26} color="#2B9C8E" />
                     </View>
                     <View>
                         <Text style={styles.title}>SuriKumpas</Text>
@@ -249,34 +215,19 @@ export default function HomeScreen() {
                 </View>
 
                 {/* Cards List */}
-                <ScrollView
+                <FlatList
+                    data={listData}
+                    renderItem={renderLabelItem}
+                    keyExtractor={keyExtractor}
                     style={styles.labelsContainer}
                     showsVerticalScrollIndicator={false}
-                    contentContainerStyle={{ paddingBottom: 30 }}
-                >
-                    {Object.entries(groupedLabels).map(([category, labels]) => {
-                        const accentColor = CATEGORY_COLORS[category] || '#5BC4B5';
-                        return (
-                            <View key={category} style={styles.categorySection}>
-                                <Text style={[styles.categoryHeader, { color: accentColor }]}>
-                                    {category}
-                                </Text>
-                                {labels.map(label => (
-                                    <View key={label.id} style={styles.labelCard}>
-                                        <View style={[styles.cardIndicator, { backgroundColor: accentColor }]} />
-                                        <View style={styles.labelContent}>
-                                            <Text style={styles.labelEnglish}>{label.english}</Text>
-                                            <Text style={styles.labelFilipino}>{label.filipino}</Text>
-                                        </View>
-                                        <View style={[styles.cardIconBox, { backgroundColor: accentColor + '22' }]}>
-                                            <MaterialIcons name="sign-language" size={20} color={accentColor} />
-                                        </View>
-                                    </View>
-                                ))}
-                            </View>
-                        );
-                    })}
-                </ScrollView>
+                    contentContainerStyle={styles.labelsContent}
+                    initialNumToRender={12}
+                    maxToRenderPerBatch={8}
+                    updateCellsBatchingPeriod={50}
+                    windowSize={7}
+                    removeClippedSubviews
+                />
             </Animated.View>
         </View>
     );
@@ -302,22 +253,20 @@ const styles = StyleSheet.create({
         marginBottom: 12,
     },
     logoRing: {
-        padding: 2,
+        width: 44,
+        height: 44,
         borderRadius: 24,
         borderWidth: 2,
         borderColor: '#A8E6CF',
         marginRight: 14,
+        alignItems: 'center',
+        justifyContent: 'center',
         shadowColor: '#5BC4B5',
         shadowOffset: { width: 0, height: 2 },
         shadowOpacity: 0.3,
         shadowRadius: 8,
         elevation: 4,
         backgroundColor: '#fff',
-    },
-    logoSmall: {
-        width: 40,
-        height: 40,
-        borderRadius: 20,
     },
     title: {
         fontSize: 26,
@@ -467,6 +416,9 @@ const styles = StyleSheet.create({
     labelsContainer: {
         flex: 1,
     },
+    labelsContent: {
+        paddingBottom: 30,
+    },
     categorySection: {
         marginBottom: 20,
     },
@@ -476,6 +428,7 @@ const styles = StyleSheet.create({
         textTransform: 'uppercase',
         letterSpacing: 2,
         marginBottom: 10,
+        marginTop: 8,
     },
     labelCard: {
         flexDirection: 'row',

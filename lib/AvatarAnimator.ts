@@ -1,5 +1,10 @@
 import * as THREE from 'three';
 
+const ANIMATOR_DEBUG = false;
+const debugLog = (...args: unknown[]) => {
+    if (ANIMATOR_DEBUG) console.log(...args);
+};
+
 export interface VRMHumanoid {
     humanBones: {
         rightUpperArm?: { node: THREE.Object3D };
@@ -16,6 +21,7 @@ export interface VRMHumanoid {
         leftMiddleProximal?: { node: THREE.Object3D };
         spine?: { node: THREE.Object3D };
         chest?: { node: THREE.Object3D };
+        upperChest?: { node: THREE.Object3D };
     };
 }
 
@@ -43,6 +49,7 @@ export class AvatarAnimator {
     private letterAnimations: Map<string, THREE.AnimationClip> = new Map();
     private idleClip: THREE.AnimationClip | null = null;
     private onSequenceEnd?: () => void;
+    private restQuaternions: Map<string, THREE.Quaternion> = new Map();
 
     // Increments on every new playSequence call to invalidate stale setTimeout callbacks
     private sequenceId: number = 0;
@@ -136,6 +143,47 @@ export class AvatarAnimator {
         return foundBone;
     }
 
+    private captureRestPose(): void {
+        this.restQuaternions.clear();
+
+        const addBone = (bone: THREE.Object3D | null | undefined) => {
+            if (bone && !this.restQuaternions.has(bone.name)) {
+                this.restQuaternions.set(bone.name, bone.quaternion.clone());
+            }
+        };
+
+        addBone(this.getBoneNode('spine'));
+        addBone(this.getBoneNode('chest'));
+        addBone(this.getBoneNode('upperChest'));
+
+        const bones = this.getAnimationBones();
+        if (!bones) return;
+
+        addBone(bones.leftUpperArm);
+        addBone(bones.rightUpperArm);
+        addBone(bones.leftLowerArm);
+        addBone(bones.rightLowerArm);
+        addBone(bones.leftHand);
+        addBone(bones.rightHand);
+
+        [
+            bones.leftThumb, bones.leftIndex, bones.leftMiddle, bones.leftRing, bones.leftLittle,
+            bones.rightThumb, bones.rightIndex, bones.rightMiddle, bones.rightRing, bones.rightLittle
+        ].forEach(finger => finger.forEach(addBone));
+    }
+
+    private getRestQuaternion(bone: THREE.Object3D): THREE.Quaternion {
+        return this.restQuaternions.get(bone.name)?.clone() ?? bone.quaternion.clone();
+    }
+
+    private withRestOffset(bone: THREE.Object3D, euler: THREE.Euler): THREE.Quaternion {
+        return this.getRestQuaternion(bone).multiply(new THREE.Quaternion().setFromEuler(euler));
+    }
+
+    private getRelaxedUpperArmQuaternion(bone: THREE.Object3D, _side: 'left' | 'right'): THREE.Quaternion {
+        return this.withRestOffset(bone, new THREE.Euler(-1.35, 0, 0));
+    }
+
     setVRM(vrm: any): void {
         this.vrm = vrm;
         const rootObject = vrm.scene; // Use the root scene for the mixer
@@ -144,6 +192,7 @@ export class AvatarAnimator {
         } else {
             console.warn('[AvatarAnimator] VRM scene is undefined.');
         }
+        this.captureRestPose();
         this.generateAllAnimations();
         this.resetAllBonesToRest();
         this.startIdleAnimation();
@@ -159,7 +208,7 @@ export class AvatarAnimator {
         // Retarget the clip so arbitrary GLB node names (e.g. l_arm_JNT) map to VRM node names natively
         this.retargetClip(clip);
         this.signAnimations.set(signName, clip);
-        console.log(`[AvatarAnimator] Custom animation imported for: ${signName}`);
+        debugLog(`[AvatarAnimator] Custom animation imported for: ${signName}`);
     }
 
     setCustomLetterAnimation(letter: string, clip: THREE.AnimationClip): void {
@@ -167,7 +216,7 @@ export class AvatarAnimator {
         this.retargetClip(clip);
         this.injectThumbOverride(clip, letter.toUpperCase());
         this.letterAnimations.set(letter.toUpperCase(), clip);
-        console.log(`[AvatarAnimator] Custom letter animation imported for: ${letter}`);
+        debugLog(`[AvatarAnimator] Custom letter animation imported for: ${letter}`);
     }
 
     private injectThumbOverride(clip: THREE.AnimationClip, letter: string): void {
@@ -180,7 +229,7 @@ export class AvatarAnimator {
             console.warn('[AvatarAnimator] injectThumbOverride: rightThumbProximal bone not found — thumb override skipped.');
             return;
         }
-        console.log(`[AvatarAnimator] injectThumbOverride: found proximal=${thumbProxR.name} distal=${thumbDistR?.name}`);
+        debugLog(`[AvatarAnimator] injectThumbOverride: found proximal=${thumbProxR.name} distal=${thumbDistR?.name}`);
 
 
         // ── Per-letter thumb position table ─────────────────────────────────────────
@@ -450,7 +499,7 @@ export class AvatarAnimator {
             console.warn(`[AvatarAnimator] "${clip.name}" UNMATCHED bones:`, [...unmappedNodes].join(', '));
         }
         const thumbMapped = mappedBones.filter(b => b.toLowerCase().includes('thumb'));
-        console.log(`[AvatarAnimator] "${clip.name}" thumb tracks: ${thumbMapped.length > 0 ? thumbMapped.join(', ') : 'NONE — bone name mismatch!'}`);
+        debugLog(`[AvatarAnimator] "${clip.name}" thumb tracks: ${thumbMapped.length > 0 ? thumbMapped.join(', ') : 'NONE — bone name mismatch!'}`);
 
         clip.tracks = tracksToKeep;
 
@@ -542,6 +591,7 @@ export class AvatarAnimator {
 
         const spine = this.getBoneNode('spine');
         const chest = this.getBoneNode('chest');
+        const upperChest = this.getBoneNode('upperChest');
         const leftUpperArm = this.getBoneNode('leftUpperArm');
         const rightUpperArm = this.getBoneNode('rightUpperArm');
         const leftLowerArm = this.getBoneNode('leftLowerArm');
@@ -550,29 +600,27 @@ export class AvatarAnimator {
         const rightHand = this.getBoneNode('rightHand');
         const bones = this.getAnimationBones();
 
-        const times = [0, 1.5, 3];
-        const spineValues: number[] = [];
-        const chestValues: number[] = [];
-
-        for (let i = 0; i < times.length; i++) {
-            const breathPhase = Math.sin((times[i] / 3) * Math.PI * 2) * 0.02;
-            spineValues.push(0, breathPhase, 0, 1);
-            chestValues.push(0, breathPhase * 0.5, 0, 1);
-        }
-
+        const times = [0, 3];
         const tracks: THREE.KeyframeTrack[] = [];
-        if (spine) tracks.push(new THREE.QuaternionKeyframeTrack(spine.name + '.quaternion', times, spineValues));
-        if (chest) tracks.push(new THREE.QuaternionKeyframeTrack(chest.name + '.quaternion', times, chestValues));
 
-        // 🚀 RELAXED ARMS DOWN: Rotate relative to rest pose, dropping them ~1.3 radians (75 degrees)
-        // down from horizontal T-pose, slightly forward and inward.
+        const addRestTrack = (bone: THREE.Object3D | null) => {
+            if (!bone) return;
+            const target = this.getRestQuaternion(bone);
+            tracks.push(new THREE.QuaternionKeyframeTrack(
+                bone.name + '.quaternion',
+                times,
+                [target.x, target.y, target.z, target.w, target.x, target.y, target.z, target.w]
+            ));
+        };
+
+        addRestTrack(spine);
+        addRestTrack(chest);
+        addRestTrack(upperChest);
+
+        // Keep the idle pose upright while the arms hang beside the body.
         const applyRelaxedArm = (bone: THREE.Object3D | null, side: 'left' | 'right') => {
             if (!bone) return;
-            const rest = bone.quaternion.clone();
-            const sign = side === 'left' ? 1 : -1;
-
-            const dropDown = new THREE.Quaternion().setFromEuler(new THREE.Euler(0.1, 0.05 * sign, sign * 1.3));
-            const target = rest.clone().multiply(dropDown);
+            const target = this.getRelaxedUpperArmQuaternion(bone, side);
 
             tracks.push(new THREE.QuaternionKeyframeTrack(
                 bone.name + '.quaternion',
@@ -583,10 +631,7 @@ export class AvatarAnimator {
 
         const applyRelaxedElbow = (bone: THREE.Object3D | null) => {
             if (!bone) return;
-            const rest = bone.quaternion.clone();
-            // Soft natural elbow bend (~16 degrees)
-            const bend = new THREE.Quaternion().setFromEuler(new THREE.Euler(0.28, 0, 0));
-            const target = rest.clone().multiply(bend);
+            const target = this.withRestOffset(bone, new THREE.Euler(0.08, 0, 0));
             tracks.push(new THREE.QuaternionKeyframeTrack(
                 bone.name + '.quaternion',
                 [0, 3],
@@ -596,11 +641,8 @@ export class AvatarAnimator {
 
         const applyRelaxedHand = (bone: THREE.Object3D | null, side: 'left' | 'right') => {
             if (!bone) return;
-            const rest = bone.quaternion.clone();
             const sign = side === 'left' ? -1 : 1;
-            // Relaxed wrist hanging slightly inward
-            const hang = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, sign * 0.1));
-            const target = rest.clone().multiply(hang);
+            const target = this.withRestOffset(bone, new THREE.Euler(0, 0, sign * 0.03));
             tracks.push(new THREE.QuaternionKeyframeTrack(
                 bone.name + '.quaternion',
                 [0, 3],
@@ -628,9 +670,7 @@ export class AvatarAnimator {
                 if (fingerArray) {
                     fingerArray.forEach((bone, j) => {
                         if (!bone) return;
-                        const rest = bone.quaternion.clone();
-                        const bend = new THREE.Quaternion().setFromEuler(new THREE.Euler(curlX[j] || 0.15, 0, 0));
-                        const target = rest.clone().multiply(bend);
+                        const target = this.withRestOffset(bone, new THREE.Euler(curlX[j] || 0.15, 0, 0));
                         tracks.push(new THREE.QuaternionKeyframeTrack(
                             bone.name + '.quaternion',
                             [0, 3],
@@ -649,15 +689,15 @@ export class AvatarAnimator {
                 const q12 = new THREE.Quaternion().setFromEuler(new THREE.Euler(0.1, 0, 0));
 
                 if (thumbArray[0]) {
-                    const target = thumbArray[0].quaternion.clone().multiply(q0);
+                    const target = this.getRestQuaternion(thumbArray[0]).multiply(q0);
                     tracks.push(new THREE.QuaternionKeyframeTrack(thumbArray[0].name + '.quaternion', [0, 3], [target.x, target.y, target.z, target.w, target.x, target.y, target.z, target.w]));
                 }
                 if (thumbArray[1]) {
-                    const target = thumbArray[1].quaternion.clone().multiply(q12);
+                    const target = this.getRestQuaternion(thumbArray[1]).multiply(q12);
                     tracks.push(new THREE.QuaternionKeyframeTrack(thumbArray[1].name + '.quaternion', [0, 3], [target.x, target.y, target.z, target.w, target.x, target.y, target.z, target.w]));
                 }
                 if (thumbArray[2]) {
-                    const target = thumbArray[2].quaternion.clone().multiply(q12);
+                    const target = this.getRestQuaternion(thumbArray[2]).multiply(q12);
                     tracks.push(new THREE.QuaternionKeyframeTrack(thumbArray[2].name + '.quaternion', [0, 3], [target.x, target.y, target.z, target.w, target.x, target.y, target.z, target.w]));
                 }
             };
@@ -782,6 +822,15 @@ export class AvatarAnimator {
 
     private resetAllBonesToRest(): void {
         if (!this.vrm) return;
+
+        const resetToCapturedRest = (bone: THREE.Object3D | null) => {
+            if (bone) bone.quaternion.copy(this.getRestQuaternion(bone));
+        };
+
+        resetToCapturedRest(this.getBoneNode('spine'));
+        resetToCapturedRest(this.getBoneNode('chest'));
+        resetToCapturedRest(this.getBoneNode('upperChest'));
+
         const bones = this.getAnimationBones();
         if (!bones) return;
 
@@ -796,8 +845,7 @@ export class AvatarAnimator {
             if (fingerArray) {
                 fingerArray.forEach((bone, j) => {
                     if (bone) {
-                        const bend = new THREE.Quaternion().setFromEuler(new THREE.Euler(curlX[j] || 0.15, 0, 0));
-                        bone.quaternion.copy(bend);
+                        bone.quaternion.copy(this.withRestOffset(bone, new THREE.Euler(curlX[j] || 0.15, 0, 0)));
                     }
                 });
             }
@@ -810,25 +858,24 @@ export class AvatarAnimator {
             const q0 = new THREE.Quaternion().setFromEuler(new THREE.Euler(0.15, sign * 0.1, -sign * 0.15));
             const q12 = new THREE.Quaternion().setFromEuler(new THREE.Euler(0.1, 0, 0));
 
-            if (thumbArray[0]) thumbArray[0].quaternion.copy(q0);
-            if (thumbArray[1]) thumbArray[1].quaternion.copy(q12);
-            if (thumbArray[2]) thumbArray[2].quaternion.copy(q12);
+            if (thumbArray[0]) thumbArray[0].quaternion.copy(this.getRestQuaternion(thumbArray[0]).multiply(q0));
+            if (thumbArray[1]) thumbArray[1].quaternion.copy(this.getRestQuaternion(thumbArray[1]).multiply(q12));
+            if (thumbArray[2]) thumbArray[2].quaternion.copy(this.getRestQuaternion(thumbArray[2]).multiply(q12));
         };
         resetThumb(bones.rightThumb, false);
         resetThumb(bones.leftThumb, true);
 
         // Reset lower arms (soft elbow bend)
-        const bendArm = new THREE.Quaternion().setFromEuler(new THREE.Euler(0.28, 0, 0));
-        if (bones.leftLowerArm) bones.leftLowerArm.quaternion.copy(bendArm);
-        if (bones.rightLowerArm) bones.rightLowerArm.quaternion.copy(bendArm);
+        if (bones.leftLowerArm) bones.leftLowerArm.quaternion.copy(this.withRestOffset(bones.leftLowerArm, new THREE.Euler(0.08, 0, 0)));
+        if (bones.rightLowerArm) bones.rightLowerArm.quaternion.copy(this.withRestOffset(bones.rightLowerArm, new THREE.Euler(0.08, 0, 0)));
 
         // Reset wrists (soft hand hang)
-        if (bones.leftHand) bones.leftHand.quaternion.copy(new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, -0.1)));
-        if (bones.rightHand) bones.rightHand.quaternion.copy(new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, 0.1)));
+        if (bones.leftHand) bones.leftHand.quaternion.copy(this.withRestOffset(bones.leftHand, new THREE.Euler(0, 0, -0.03)));
+        if (bones.rightHand) bones.rightHand.quaternion.copy(this.withRestOffset(bones.rightHand, new THREE.Euler(0, 0, 0.03)));
 
         // Reset upper arms to hang naturally downward along the body
-        if (bones.leftUpperArm) bones.leftUpperArm.quaternion.copy(new THREE.Quaternion().setFromEuler(new THREE.Euler(0.1, 0.05, -1.3)));
-        if (bones.rightUpperArm) bones.rightUpperArm.quaternion.copy(new THREE.Quaternion().setFromEuler(new THREE.Euler(0.1, -0.05, 1.3)));
+        if (bones.leftUpperArm) bones.leftUpperArm.quaternion.copy(this.getRelaxedUpperArmQuaternion(bones.leftUpperArm, 'left'));
+        if (bones.rightUpperArm) bones.rightUpperArm.quaternion.copy(this.getRelaxedUpperArmQuaternion(bones.rightUpperArm, 'right'));
     }
 
 
@@ -861,7 +908,7 @@ export class AvatarAnimator {
                 if (this.signAnimations.has(upperVal)) {
                     processedSequence.push({ ...item, value: upperVal });
                 } else {
-                    console.log(`[AvatarAnimator] Sign "${item.value}" not found in custom animations. Fingerspelling fallback.`);
+                    debugLog(`[AvatarAnimator] Sign "${item.value}" not found in custom animations. Fingerspelling fallback.`);
                     for (const char of upperVal) {
                         if (char >= 'A' && char <= 'Z') {
                             processedSequence.push({
@@ -886,12 +933,12 @@ export class AvatarAnimator {
     private processNextInQueue(id: number = this.sequenceId): void {
         // If a newer sequence has started, this callback is stale — bail out
         if (id !== this.sequenceId) {
-            console.log('[AvatarAnimator] Stale timer callback ignored.');
+            debugLog('[AvatarAnimator] Stale timer callback ignored.');
             return;
         }
 
         if (!this.mixer || this.queue.length === 0) {
-            console.log(`[AvatarAnimator] Sequence #${id} finished.`);
+            debugLog(`[AvatarAnimator] Sequence #${id} finished.`);
             this.isProcessingQueue = false;
             this.isPlayingSign = false;
 
@@ -934,7 +981,7 @@ export class AvatarAnimator {
             return;
         }
 
-        console.log(`[AvatarAnimator] Playing "${nextItem.value}", duration=${clip.duration.toFixed(2)}s, tracks=${clip.tracks.length}`);
+        debugLog(`[AvatarAnimator] Playing "${nextItem.value}", duration=${clip.duration.toFixed(2)}s, tracks=${clip.tracks.length}`);
 
         const nextAction = this.mixer.clipAction(clip);
         nextAction.setLoop(THREE.LoopOnce, 1);
@@ -944,8 +991,12 @@ export class AvatarAnimator {
         // to a sign that might not have finger tracks, we MUST ensure the bones reset.
         this.resetAllBonesToRest();
 
-        // Letters crossfade quickly so the sequence feels fluid; signs get a longer blend.
         const isLetter = nextItem.type === 'letter';
+        const playbackRate = isLetter ? 1.6 : 1.0;
+
+        nextAction.timeScale = playbackRate;
+
+        // Letters crossfade quickly so the sequence feels fluid; signs get a longer blend.
         const crossFadeDuration = isLetter ? 0.08 : 0.25;
 
         if (this.currentSignAction) {
@@ -968,9 +1019,10 @@ export class AvatarAnimator {
 
         // For letters, hold the pose briefly so it's readable, then move to the next.
         // For signs, play full duration with a small buffer.
+        const effectiveDurationMs = (clip.duration / playbackRate) * 1000;
         const holdMs = isLetter
-            ? Math.max(clip.duration * 1000, 600) + 80   // min 600 ms per letter so it's readable
-            : clip.duration * 1000 + 200;
+            ? Math.max(effectiveDurationMs, 450) + 60
+            : effectiveDurationMs + 200;
         setTimeout(() => {
             this.processNextInQueue(id);
         }, holdMs);
@@ -985,7 +1037,7 @@ export class AvatarAnimator {
     }
 
     stopSignAnimation(): void {
-        console.log('[AvatarAnimator] Resetting whole queue');
+        debugLog('[AvatarAnimator] Resetting whole queue');
         this.queue = [];
         this.isProcessingQueue = false;
         if (this.currentSignAction) {

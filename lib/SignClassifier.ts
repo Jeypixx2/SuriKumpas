@@ -3,6 +3,11 @@ import { loadTensorflowModel, TensorflowModel } from 'react-native-fast-tflite';
 import { Asset } from 'expo-asset';
 import * as FileSystem from 'expo-file-system';
 
+const CLASSIFIER_DEBUG = false;
+const debugLog = (...args: unknown[]) => {
+    if (CLASSIFIER_DEBUG) console.log(...args);
+};
+
 // Landmark index offsets matching extractKeypoints.ts order (Standard MediaPipe):
 // Pose: 0..131, Face: 132..1535, LH: 1536..1598, RH: 1599..1661
 const POSE_START = 0;
@@ -13,6 +18,8 @@ const RH_START   = LH_START + 21 * 3;            // 1599
 export class SignClassifier {
     private fslModel: TensorflowModel | null = null;
     private alphabetModel: TensorflowModel | null = null;
+    private fslLoadPromise: Promise<void> | null = null;
+    private alphabetLoadPromise: Promise<void> | null = null;
 
     // Helper to ensure the asset is on the local filesystem with a 'file://' URI
     // react-native-fast-tflite's java.net.URL fails on Android if it's an asset:// or res:// URI
@@ -32,32 +39,46 @@ export class SignClassifier {
 
     async loadFSLModel(): Promise<void> {
         if (this.fslModel !== null) {
-            console.log('[TFLite] FSL model already loaded.');
+            debugLog('[TFLite] FSL model already loaded.');
             return;
         }
-        try {
-            const uri = await this.getLocalModelUri(require('../assets/fsl_model.tflite'), 'fsl_model.tflite');
-            this.fslModel = await loadTensorflowModel({ url: uri }, []);
-            console.log('[TFLite] FSL model loaded. Inputs:', this.fslModel.inputs);
-        } catch (e) {
-            console.error('[TFLite] Failed to load FSL model', e);
-            throw e; // rethrow to be caught in UI if needed
+        if (!this.fslLoadPromise) {
+            this.fslLoadPromise = (async () => {
+                try {
+                    const uri = await this.getLocalModelUri(require('../assets/fsl_model.tflite'), 'fsl_model.tflite');
+                    this.fslModel = await loadTensorflowModel({ url: uri }, []);
+                    debugLog('[TFLite] FSL model loaded. Inputs:', this.fslModel.inputs);
+                } catch (e) {
+                    console.error('[TFLite] Failed to load FSL model', e);
+                    throw e; // rethrow to be caught in UI if needed
+                } finally {
+                    this.fslLoadPromise = null;
+                }
+            })();
         }
+        return this.fslLoadPromise;
     }
  
     async loadAlphabetModel(): Promise<void> {
         if (this.alphabetModel !== null) {
-            console.log('[TFLite] Alphabet model already loaded.');
+            debugLog('[TFLite] Alphabet model already loaded.');
             return;
         }
-        try {
-            const uri = await this.getLocalModelUri(require('../assets/alphabet_model.tflite'), 'alphabet_model.tflite');
-            this.alphabetModel = await loadTensorflowModel({ url: uri }, []);
-            console.log('[TFLite] Alphabet model loaded. Inputs:', this.alphabetModel.inputs);
-        } catch (e) {
-            console.error('[TFLite] Failed to load Alphabet model', e);
-            throw e; // rethrow to be caught in UI if needed
+        if (!this.alphabetLoadPromise) {
+            this.alphabetLoadPromise = (async () => {
+                try {
+                    const uri = await this.getLocalModelUri(require('../assets/alphabet_model.tflite'), 'alphabet_model.tflite');
+                    this.alphabetModel = await loadTensorflowModel({ url: uri }, []);
+                    debugLog('[TFLite] Alphabet model loaded. Inputs:', this.alphabetModel.inputs);
+                } catch (e) {
+                    console.error('[TFLite] Failed to load Alphabet model', e);
+                    throw e; // rethrow to be caught in UI if needed
+                } finally {
+                    this.alphabetLoadPromise = null;
+                }
+            })();
         }
+        return this.alphabetLoadPromise;
     }
 
     isFSLModelLoaded(): boolean { return this.fslModel !== null; }
@@ -131,7 +152,7 @@ export class SignClassifier {
         // Auto-scale if model returns 0-255 instead of 0-1
         if (dataType === 'uint8' || maxConfidence > 1.0) maxConfidence = maxConfidence / 255.0;
 
-        console.log(`[TFLite Debug] FSL Prediction: Index ${predictedIdx}, Confidence: ${maxConfidence.toFixed(4)}`);
+        debugLog(`[TFLite Debug] FSL Prediction: Index ${predictedIdx}, Confidence: ${maxConfidence.toFixed(4)}`);
         return { labelIndex: predictedIdx, confidence: maxConfidence };
     }
 
@@ -184,7 +205,7 @@ export class SignClassifier {
         }
 
         if (dataType === 'uint8' || maxConfidence > 1.0) maxConfidence = maxConfidence / 255.0;
-        console.log(`[TFLite Debug] Alphabet: Expected ${expectedSize}, Result: Index ${predictedIdx}, Conf: ${maxConfidence.toFixed(4)}`);
+        debugLog(`[TFLite Debug] Alphabet: Expected ${expectedSize}, Result: Index ${predictedIdx}, Conf: ${maxConfidence.toFixed(4)}`);
         return { letterIndex: predictedIdx, confidence: maxConfidence };
     }
 

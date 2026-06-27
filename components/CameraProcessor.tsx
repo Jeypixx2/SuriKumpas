@@ -4,6 +4,11 @@ import { CameraView, CameraType, useCameraPermissions } from 'expo-camera';
 import { WebView } from 'react-native-webview';
 import * as FileSystem from 'expo-file-system/legacy';
 
+const CAMERA_DEBUG = false;
+const debugLog = (...args: unknown[]) => {
+    if (CAMERA_DEBUG) console.log(...args);
+};
+
 interface CameraProcessorProps {
     onKeypointsExtracted?: (keypoints: Float32Array | 'no-hands') => void;
     style?: any;
@@ -259,15 +264,15 @@ const CameraProcessor = forwardRef<CameraProcessorRef, CameraProcessorProps>(
             try {
                 const message = JSON.parse(event.nativeEvent.data);
                 if (message.type === 'keypoints') {
-                    if (Math.random() < 0.05) console.log(`[CameraProcessor] Received keypoints, length: ${message.data.length}`);
+                    if (CAMERA_DEBUG && Math.random() < 0.05) debugLog(`[CameraProcessor] Received keypoints, length: ${message.data.length}`);
                     const keypoints = new Float32Array(message.data);
                     onKeypointsExtracted?.(keypoints);
                 } else if (message.type === 'no-hands') {
                     onKeypointsExtracted?.('no-hands');
                 } else if (message.type === 'log') {
-                    console.log('[WebView DOM]', message.message);
+                    debugLog('[WebView DOM]', message.message);
                 } else if (message.type === 'ready') {
-                    console.log('[CameraProcessor] WebView Ready Signal Received');
+                    debugLog('[CameraProcessor] WebView Ready Signal Received');
                     setIsWebViewReady(true);
                 }
             } catch (error) {

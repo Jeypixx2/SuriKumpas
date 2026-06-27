@@ -1,13 +1,17 @@
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Tabs, useSegments } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { View, Text, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet, InteractionManager } from 'react-native';
 import { AvatarProvider, useAvatarContext } from '../../lib/AvatarContext';
 import AvatarViewer from '../../components/AvatarViewer';
+
+const AVATAR_WARMUP_DELAY_MS = 1200;
 
 function GlobalAvatar() {
   const segments = useSegments();
   const isTranslate = segments.includes('translate');
+  const [shouldMountAvatar, setShouldMountAvatar] = useState(isTranslate);
+  const mountAvatar = shouldMountAvatar || isTranslate;
   const { 
     signToPlay, setSignToPlay,
     letterToPlay, setLetterToPlay,
@@ -29,6 +33,35 @@ function GlobalAvatar() {
       />
     ));
   }, []);
+
+  useEffect(() => {
+    if (!isTranslate) {
+      setSequenceToPlay(null);
+      setSignToPlay(null);
+      setLetterToPlay(null);
+    }
+  }, [isTranslate, setSequenceToPlay, setSignToPlay, setLetterToPlay]);
+
+  useEffect(() => {
+    if (isTranslate) {
+      setShouldMountAvatar(true);
+      return;
+    }
+
+    if (shouldMountAvatar) return;
+
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const interaction = InteractionManager.runAfterInteractions(() => {
+      timer = setTimeout(() => setShouldMountAvatar(true), AVATAR_WARMUP_DELAY_MS);
+    });
+
+    return () => {
+      if (timer) clearTimeout(timer);
+      interaction.cancel?.();
+    };
+  }, [isTranslate, shouldMountAvatar]);
+
+  if (!mountAvatar) return null;
 
   return (
     <View style={[
@@ -57,9 +90,9 @@ function GlobalAvatar() {
          {dots}
       </View>
 
-      {!isAvatarLoaded && (
+      {isTranslate && !isAvatarLoaded && (
         <View style={styles.loadingOverlay}>
-          <Text style={styles.loadingText}>Loading 3D Engine...</Text>
+          <Text style={styles.loadingText}>Preparing avatar...</Text>
         </View>
       )}
     </View>

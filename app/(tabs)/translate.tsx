@@ -1,43 +1,60 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { StyleSheet, View, Text, Dimensions } from 'react-native';
+import { StyleSheet, View, Text } from 'react-native';
 import { useRouter } from 'expo-router';
 import { MaterialIcons } from '@expo/vector-icons';
 import { TouchableOpacity } from 'react-native';
 import Voice, { SpeechResultsEvent, SpeechErrorEvent } from '@dev-amirzubair/react-native-voice';
 import { useAvatarContext } from '../../lib/AvatarContext';
 import MicButton from '../../components/MicButton';
-import { matchSpeechToLabel, FSLLabel, SequenceItem, tokenizeSentence } from '../../lib/labels';
+import { tokenizeSentence } from '../../lib/labels';
 
-const { width, height } = Dimensions.get('window');
+const normalizeSpeechText = (text: string) => text.trim().replace(/\s+/g, ' ');
 
 export default function TranslateScreen() {
     const router = useRouter();
     const [isListening, setIsListening] = useState(false);
     const [recognizedText, setRecognizedText] = useState('');
     const {
-        setSignToPlay, setLetterToPlay, sequenceToPlay, setSequenceToPlay, isAvatarLoaded
+        setSignToPlay, setLetterToPlay, sequenceToPlay, setSequenceToPlay
     } = useAvatarContext();
 
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
     const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+    const partialTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+    const lastQueuedSpeechRef = useRef('');
 
-    const onSpeechResults = useCallback((e: SpeechResultsEvent) => {
-        const text = e.value?.[0] || '';
+    const clearPartialTimeout = useCallback(() => {
+        if (partialTimeoutRef.current) {
+            clearTimeout(partialTimeoutRef.current);
+            partialTimeoutRef.current = null;
+        }
+    }, []);
+
+    const queueSpeechForSigning = useCallback((rawText: string, isFinal: boolean) => {
+        const text = normalizeSpeechText(rawText);
+        if (!text) return;
+
         setRecognizedText(text);
-        setIsListening(false);
+        if (text === lastQueuedSpeechRef.current) {
+            if (isFinal) setErrorMessage(null);
+            return;
+        }
 
         const sequence = tokenizeSentence(text);
-
         if (sequence.length > 0) {
             setSequenceToPlay(sequence);
             setSignToPlay(null);
             setLetterToPlay(null);
             setErrorMessage(null);
+            lastQueuedSpeechRef.current = text;
         } else {
+            if (!isFinal) return;
+
             setErrorMessage('Sign not available');
             setSequenceToPlay(null);
             setSignToPlay(null);
             setLetterToPlay(null);
+            lastQueuedSpeechRef.current = '';
 
             if (timeoutRef.current) {
                 clearTimeout(timeoutRef.current);
@@ -48,8 +65,32 @@ export default function TranslateScreen() {
         }
     }, [setSequenceToPlay, setSignToPlay, setLetterToPlay]);
 
+    const onSpeechPartialResults = useCallback((e: SpeechResultsEvent) => {
+        const text = normalizeSpeechText(e.value?.[0] || '');
+        if (!text) return;
+
+        setRecognizedText(text);
+        clearPartialTimeout();
+
+        const partialSequence = tokenizeSentence(text);
+        const isCompleteKnownSign = partialSequence.length === 1 && partialSequence[0].type === 'sign';
+        if (!isCompleteKnownSign) return;
+
+        partialTimeoutRef.current = setTimeout(() => {
+            queueSpeechForSigning(text, false);
+        }, 200);
+    }, [clearPartialTimeout, queueSpeechForSigning]);
+
+    const onSpeechResults = useCallback((e: SpeechResultsEvent) => {
+        const text = e.value?.[0] || '';
+        clearPartialTimeout();
+        setIsListening(false);
+        queueSpeechForSigning(text, true);
+    }, [clearPartialTimeout, queueSpeechForSigning]);
+
     const onSpeechError = useCallback((e: SpeechErrorEvent) => {
         console.warn('Speech error:', e.error);
+        clearPartialTimeout();
         
         if (e.error && (e.error as any).code === '7') {
            setIsListening(false);
@@ -65,19 +106,21 @@ export default function TranslateScreen() {
         timeoutRef.current = setTimeout(() => {
             setErrorMessage(null);
         }, 3000);
-    }, []);
+    }, [clearPartialTimeout]);
 
     useEffect(() => {
         Voice.onSpeechResults = onSpeechResults;
+        Voice.onSpeechPartialResults = onSpeechPartialResults;
         Voice.onSpeechError = onSpeechError;
-    }, [onSpeechResults, onSpeechError]);
+    }, [onSpeechResults, onSpeechPartialResults, onSpeechError]);
 
     useEffect(() => {
         return () => {
             Voice.destroy().then(() => Voice.removeAllListeners());
             if (timeoutRef.current) clearTimeout(timeoutRef.current);
+            clearPartialTimeout();
         };
-    }, []);
+    }, [clearPartialTimeout]);
 
     const toggleListening = useCallback(async () => {
         if (!Voice) {
@@ -86,39 +129,31 @@ export default function TranslateScreen() {
             return;
         }
 
-        if (!isAvatarLoaded) {
-            setErrorMessage("Please wait for the 3D Avatar to finish loading.");
-            if (timeoutRef.current) {
-                clearTimeout(timeoutRef.current);
-            }
-            timeoutRef.current = setTimeout(() => {
-                setErrorMessage(null);
-            }, 3000);
-            return;
-        }
-
         if (isListening) {
             try {
                 await Voice.stop();
+                clearPartialTimeout();
                 setIsListening(false);
             } catch (error) {
                 console.error('Error stopping voice:', error);
             }
         } else {
             try {
+                clearPartialTimeout();
+                lastQueuedSpeechRef.current = '';
                 setRecognizedText('');
                 setErrorMessage(null);
                 setSequenceToPlay(null);
                 setSignToPlay(null);
                 setLetterToPlay(null);
-                await Voice.start('en-US'); 
+                await Voice.start('en-US');
                 setIsListening(true);
             } catch (error) {
                 console.error('Error starting voice:', error);
                 setErrorMessage('Could not start speech recognition. Check microphone permissions.');
             }
         }
-    }, [isListening, isAvatarLoaded]);
+    }, [isListening, clearPartialTimeout]);
 
     return (
         <View style={styles.container}>

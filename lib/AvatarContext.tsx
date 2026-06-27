@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, ReactNode } from 'react';
+import React, { createContext, useContext, useMemo, useState, ReactNode } from 'react';
 import { SequenceItem } from '../lib/labels';
 
 interface AvatarState {
@@ -20,13 +20,15 @@ export function AvatarProvider({ children }: { children: ReactNode }) {
     const [sequenceToPlay, setSequenceToPlay] = useState<SequenceItem[] | null>(null);
     const [isAvatarLoaded, setIsAvatarLoaded] = useState(false);
 
+    const value = useMemo(() => ({
+        signToPlay, setSignToPlay,
+        letterToPlay, setLetterToPlay,
+        sequenceToPlay, setSequenceToPlay,
+        isAvatarLoaded, setIsAvatarLoaded
+    }), [signToPlay, letterToPlay, sequenceToPlay, isAvatarLoaded]);
+
     return (
-        <AvatarContext.Provider value={{
-            signToPlay, setSignToPlay,
-            letterToPlay, setLetterToPlay,
-            sequenceToPlay, setSequenceToPlay,
-            isAvatarLoaded, setIsAvatarLoaded
-        }}>
+        <AvatarContext.Provider value={value}>
             {children}
         </AvatarContext.Provider>
     );
