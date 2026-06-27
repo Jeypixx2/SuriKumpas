@@ -67,13 +67,13 @@ export default function LoadingScreen({ steps, currentStep, appName = 'SuriKumpa
     const getStepIcon = (status: LoadingStep['status']) => {
         switch (status) {
             case 'complete':
-                return <Text style={styles.completeIcon}>✓</Text>;
+                return <Text style={styles.completeIcon}>OK</Text>;
             case 'error':
-                return <Text style={styles.errorIcon}>✗</Text>;
+                return <Text style={styles.errorIcon}>!</Text>;
             case 'loading':
                 return <ActivityIndicator size="small" color="#5BC4B5" />;
             default:
-                return <Text style={styles.pendingIcon}>○</Text>;
+                return <Text style={styles.pendingIcon}>o</Text>;
         }
     };
 

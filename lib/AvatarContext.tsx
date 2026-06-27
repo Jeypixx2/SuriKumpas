@@ -6,10 +6,12 @@ interface AvatarState {
     letterToPlay: string | null;
     sequenceToPlay: SequenceItem[] | null;
     isAvatarLoaded: boolean;
+    avatarLoadError: string | null;
     setSignToPlay: (sign: string | null) => void;
     setLetterToPlay: (letter: string | null) => void;
     setSequenceToPlay: (seq: SequenceItem[] | null) => void;
     setIsAvatarLoaded: (loaded: boolean) => void;
+    setAvatarLoadError: (error: string | null) => void;
 }
 
 const AvatarContext = createContext<AvatarState | null>(null);
@@ -19,13 +21,15 @@ export function AvatarProvider({ children }: { children: ReactNode }) {
     const [letterToPlay, setLetterToPlay] = useState<string | null>(null);
     const [sequenceToPlay, setSequenceToPlay] = useState<SequenceItem[] | null>(null);
     const [isAvatarLoaded, setIsAvatarLoaded] = useState(false);
+    const [avatarLoadError, setAvatarLoadError] = useState<string | null>(null);
 
     const value = useMemo(() => ({
         signToPlay, setSignToPlay,
         letterToPlay, setLetterToPlay,
         sequenceToPlay, setSequenceToPlay,
-        isAvatarLoaded, setIsAvatarLoaded
-    }), [signToPlay, letterToPlay, sequenceToPlay, isAvatarLoaded]);
+        isAvatarLoaded, setIsAvatarLoaded,
+        avatarLoadError, setAvatarLoadError
+    }), [signToPlay, letterToPlay, sequenceToPlay, isAvatarLoaded, avatarLoadError]);
 
     return (
         <AvatarContext.Provider value={value}>

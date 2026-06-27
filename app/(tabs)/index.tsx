@@ -24,6 +24,8 @@ const CATEGORY_COLORS: Record<string, string> = {
     DRINK:        '#26A69A',
 };
 
+const wait = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+
 export default function HomeScreen() {
     const router = useRouter();
     const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
@@ -33,23 +35,32 @@ export default function HomeScreen() {
     const listOpacity = useRef(new Animated.Value(1)).current;
 
     useEffect(() => {
+        let cancelled = false;
         const timer = setTimeout(() => {
             InteractionManager.runAfterInteractions(() => {
-                Promise.allSettled([
-                    globalClassifier.loadFSLModel(),
-                    globalClassifier.loadAlphabetModel(),
-                ]).then(results => {
-                    results.forEach((result, index) => {
-                        if (result.status === 'rejected') {
-                            const modelName = index === 0 ? 'FSL' : 'Alphabet';
-                            console.warn(`[Home] Background ${modelName} model preload failed:`, result.reason);
+                (async () => {
+                    const modelLoads = [
+                        { name: 'FSL', load: () => globalClassifier.loadFSLModel() },
+                        { name: 'Alphabet', load: () => globalClassifier.loadAlphabetModel() },
+                    ];
+
+                    for (const model of modelLoads) {
+                        if (cancelled) return;
+                        try {
+                            await model.load();
+                        } catch (error) {
+                            console.warn(`[Home] Background ${model.name} model preload failed:`, error);
                         }
-                    });
-                });
+                        await wait(800);
+                    }
+                })();
             });
         }, 2500);
 
-        return () => clearTimeout(timer);
+        return () => {
+            cancelled = true;
+            clearTimeout(timer);
+        };
     }, []);
 
     const animateButtonPress = (scaleVar: Animated.Value, toValue: number) => {

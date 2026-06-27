@@ -144,9 +144,14 @@ export function tokenizeSentence(sentence: string): SequenceItem[] {
     if (!normalized) return [];
 
     // 2. Strip punctuation that might interfere with word matching
+    normalized = normalized.replace(/[‘’]/g, "'");
     normalized = normalized.replace(/[.,!?;:]/g, '');
 
     // 3. Handle common spelling/slang variations to ensure they match high-quality GLBs
+    normalized = normalized.replace(/\bI'M\b/g, 'IM');
+    normalized = normalized.replace(/\bYOU'RE\b/g, 'YOURE');
+    normalized = normalized.replace(/\bDONT\b/g, "DON'T");
+    normalized = normalized.replace(/\bDO\s+NOT\b/g, "DON'T");
     // Specifically handle "KAMUSTA" -> "KUMUSTA KA"
     normalized = normalized.replace(/\bKAMUSTA\b/g, 'KUMUSTA KA');
     // Ensure "KUMUSTA" matches "KUMUSTA KA" if it's a standalone word

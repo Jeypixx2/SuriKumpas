@@ -96,12 +96,12 @@ const MEDIAPIPE_SCRIPT = `
             
             // Draw hands only — pose skeleton is expensive and irrelevant for sign classification
             if (results.leftHandLandmarks) {
-                drawConnectors(canvasCtx, results.leftHandLandmarks, HAND_CONNECTIONS, {color: '#00FFCC', lineWidth: 2});
-                drawLandmarks(canvasCtx, results.leftHandLandmarks, {color: '#ffffff', lineWidth: 1, radius: 3});
+                drawConnectors(canvasCtx, results.leftHandLandmarks, HAND_CONNECTIONS, {color: '#00FFCC', lineWidth: 1.5});
+                drawLandmarks(canvasCtx, results.leftHandLandmarks, {color: '#ffffff', lineWidth: 1, radius: 2});
             }
             if (results.rightHandLandmarks) {
-                drawConnectors(canvasCtx, results.rightHandLandmarks, HAND_CONNECTIONS, {color: '#00FFCC', lineWidth: 2});
-                drawLandmarks(canvasCtx, results.rightHandLandmarks, {color: '#ffffff', lineWidth: 1, radius: 3});
+                drawConnectors(canvasCtx, results.rightHandLandmarks, HAND_CONNECTIONS, {color: '#00FFCC', lineWidth: 1.5});
+                drawLandmarks(canvasCtx, results.rightHandLandmarks, {color: '#ffffff', lineWidth: 1, radius: 2});
             }
             
             canvasCtx.restore();
@@ -255,7 +255,7 @@ const CameraProcessor = forwardRef<CameraProcessorRef, CameraProcessorProps>(
             </head>
             <body>
                 <video id="input_video" playsinline></video>
-                <canvas id="output_canvas" width="640" height="480"></canvas>
+                <canvas id="output_canvas" width="320" height="240"></canvas>
             </body>
             </html>
         `;

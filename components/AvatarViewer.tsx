@@ -48,10 +48,10 @@ import { AvatarAnimator } from '../lib/AvatarAnimator';
 import { SequenceItem } from '../lib/labels';
 
 const AVATAR_TARGET_FRAME_MS = 33;
-const LETTER_PRELOAD_DELAY_MS = 6500;
-const ACTIVE_SIGN_PRELOAD_DELAY_MS = 6000;
-const INACTIVE_SIGN_PRELOAD_DELAY_MS = 12000;
-const BACKGROUND_PRELOAD_GAP_MS = 750;
+const LETTER_PRELOAD_DELAY_MS = 8500;
+const ACTIVE_SIGN_PRELOAD_DELAY_MS = 10000;
+const INACTIVE_SIGN_PRELOAD_DELAY_MS = 25000;
+const BACKGROUND_PRELOAD_GAP_MS = 2000;
 
 const glbArrayBufferCache = new Map<any, Promise<ArrayBuffer>>();
 const animationClipCache = new Map<any, Promise<THREE.AnimationClip | null>>();
@@ -67,6 +67,19 @@ const getTextureCacheKey = (dataUrl: string) => {
     return `${dataUrl.length}:${dataUrl.slice(0, 80)}:${dataUrl.slice(-80)}`;
 };
 
+const readGlbAssetArrayBuffer = async (uri: string): Promise<ArrayBuffer> => {
+    const glbBase64 = await FileSystem.readAsStringAsync(uri, { encoding: 'base64' });
+    const glbBuf = Buffer.from(glbBase64, 'base64');
+    const arrayBuffer = glbBuf.buffer.slice(glbBuf.byteOffset, glbBuf.byteOffset + glbBuf.byteLength);
+
+    const header = Buffer.from(arrayBuffer.slice(0, 4)).toString('utf8');
+    if (header !== 'glTF') {
+        throw new Error(`Invalid GLB asset data. Expected "glTF" header, got "${header}".`);
+    }
+
+    return arrayBuffer;
+};
+
 const getGlbArrayBuffer = (assetFile: any): Promise<ArrayBuffer> => {
     const cached = glbArrayBufferCache.get(assetFile);
     if (cached) return cached;
@@ -76,9 +89,7 @@ const getGlbArrayBuffer = (assetFile: any): Promise<ArrayBuffer> => {
         const glbUri = glbAsset.localUri || glbAsset.uri;
         if (!glbUri) throw new Error('Could not resolve GLB asset URI');
 
-        const glbBase64 = await FileSystem.readAsStringAsync(glbUri, { encoding: 'base64' });
-        const glbBuf = Buffer.from(glbBase64, 'base64');
-        return glbBuf.buffer.slice(glbBuf.byteOffset, glbBuf.byteOffset + glbBuf.byteLength);
+        return readGlbAssetArrayBuffer(glbUri);
     })().catch(error => {
         glbArrayBufferCache.delete(assetFile);
         throw error;
@@ -123,6 +134,8 @@ const CUSTOM_ANIMATIONS: Record<string, any> = {
     'HELLO': require('../assets/hello.glb'),
     'HOW ARE YOU': require('../assets/how_are_you.glb'),
     'KUMUSTA KA': require('../assets/how_are_you.glb'),
+    'NICE TO MEET YOU': require('../assets/nice_to_meet_you.glb'),
+    'MASAYA AKONG MAKILALA KA': require('../assets/nice_to_meet_you.glb'),
     'AUNTIE': require('../assets/auntie.glb'),
     'TITA': require('../assets/auntie.glb'),
     'IM FINE': require('../assets/im_fine.glb'),
@@ -130,6 +143,28 @@ const CUSTOM_ANIMATIONS: Record<string, any> = {
     'MABUTI': require('../assets/im_fine.glb'),
     'THANK YOU': require('../assets/thank_you.glb'),
     'SALAMAT': require('../assets/thank_you.glb'),
+    "DON'T UNDERSTAND": require('../assets/dont_understand.glb'),
+    'DONT UNDERSTAND': require('../assets/dont_understand.glb'),
+    'HINDI NAINTINDIHAN': require('../assets/dont_understand.glb'),
+    "DON'T KNOW": require('../assets/dont_know.glb'),
+    'DONT KNOW': require('../assets/dont_know.glb'),
+    'HINDI ALAM': require('../assets/dont_know.glb'),
+    'APRIL': require('../assets/april.glb'),
+    'ABRIL': require('../assets/april.glb'),
+    'AUGUST': require('../assets/august.glb'),
+    'AGOSTO': require('../assets/august.glb'),
+    'BOY': require('../assets/boy.glb'),
+    'LALAKI': require('../assets/boy.glb'),
+    'BLIND': require('../assets/blind.glb'),
+    'BULAG': require('../assets/blind.glb'),
+    'BLUE': require('../assets/blue.glb'),
+    'ASUL': require('../assets/blue.glb'),
+    'BLACK': require('../assets/black.glb'),
+    'ITIM': require('../assets/black.glb'),
+    'BREAD': require('../assets/bread.glb'),
+    'TINAPAY': require('../assets/bread.glb'),
+    'BEER': require('../assets/beer.glb'),
+    'BIRA': require('../assets/beer.glb'),
 };
 
 const CUSTOM_LETTERS: Record<string, any> = {
@@ -153,11 +188,6 @@ const CUSTOM_LETTERS: Record<string, any> = {
 
 const PRIORITY_SIGN_PRELOADS = [
     'GOOD EVENING',
-    'HELLO',
-    'HOW ARE YOU',
-    'AUNTIE',
-    'IM FINE',
-    'THANK YOU',
 ];
 
 // Apply Polyfills for all Three.js Loaders to intercept and prevent native execution hangs

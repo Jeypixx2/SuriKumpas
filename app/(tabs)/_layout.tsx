@@ -1,22 +1,98 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Tabs, useSegments } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { View, Text, StyleSheet, InteractionManager } from 'react-native';
+import { View, Text, StyleSheet } from 'react-native';
 import { AvatarProvider, useAvatarContext } from '../../lib/AvatarContext';
 import AvatarViewer from '../../components/AvatarViewer';
+import { globalClassifier } from '../../lib/SignClassifier';
+import LoadingScreen from '../../components/LoadingScreen';
 
-const AVATAR_WARMUP_DELAY_MS = 1200;
+const BOOT_MIN_MS = 1200;
+const BOOT_MAX_MS = 8500;
+const MODEL_LOAD_GAP_MS = 350;
+
+const wait = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+type LoadingStepStatus = 'pending' | 'loading' | 'complete' | 'error';
+
+function BootLoadingOverlay() {
+  const { isAvatarLoaded, avatarLoadError } = useAvatarContext();
+  const [modelsLoaded, setModelsLoaded] = useState(false);
+  const [modelsFailed, setModelsFailed] = useState(false);
+  const [minimumElapsed, setMinimumElapsed] = useState(false);
+  const [timedOut, setTimedOut] = useState(false);
+
+  useEffect(() => {
+    const minTimer = setTimeout(() => setMinimumElapsed(true), BOOT_MIN_MS);
+    const maxTimer = setTimeout(() => setTimedOut(true), BOOT_MAX_MS);
+
+    return () => {
+      clearTimeout(minTimer);
+      clearTimeout(maxTimer);
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadModels = async () => {
+      try {
+        await wait(200);
+        await globalClassifier.loadFSLModel();
+        await wait(MODEL_LOAD_GAP_MS);
+        await globalClassifier.loadAlphabetModel();
+        if (!cancelled) setModelsLoaded(true);
+      } catch (error) {
+        console.warn('[Boot] Model preload failed:', error);
+        if (!cancelled) setModelsFailed(true);
+      }
+    };
+
+    loadModels();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const modelStepDone = modelsLoaded || modelsFailed;
+  const avatarStepDone = isAvatarLoaded || !!avatarLoadError;
+  const ready = minimumElapsed && avatarStepDone && modelStepDone;
+  if (ready || timedOut) return null;
+
+  const steps: { label: string; status: LoadingStepStatus }[] = [
+    {
+      label: '3D avatar',
+      status: avatarLoadError ? 'error' : isAvatarLoaded ? 'complete' : 'loading',
+    },
+    {
+      label: 'Recognition models',
+      status: modelsFailed ? 'error' : modelsLoaded ? 'complete' : 'loading',
+    },
+    {
+      label: 'Sign animation loader',
+      status: isAvatarLoaded ? 'complete' : 'pending',
+    },
+  ];
+
+  const loadingIndex = steps.findIndex(step => step.status === 'loading' || step.status === 'error');
+  const currentStep = loadingIndex >= 0 ? loadingIndex : steps.length - 1;
+
+  return (
+    <View style={styles.bootOverlay}>
+      <LoadingScreen steps={steps} currentStep={currentStep} />
+    </View>
+  );
+}
 
 function GlobalAvatar() {
   const segments = useSegments();
   const isTranslate = segments.includes('translate');
-  const [shouldMountAvatar, setShouldMountAvatar] = useState(isTranslate);
-  const mountAvatar = shouldMountAvatar || isTranslate;
   const { 
     signToPlay, setSignToPlay,
     letterToPlay, setLetterToPlay,
     sequenceToPlay, setSequenceToPlay,
-    isAvatarLoaded, setIsAvatarLoaded 
+    isAvatarLoaded, setIsAvatarLoaded,
+    avatarLoadError, setAvatarLoadError
   } = useAvatarContext();
 
   const dots = useMemo(() => {
@@ -42,32 +118,11 @@ function GlobalAvatar() {
     }
   }, [isTranslate, setSequenceToPlay, setSignToPlay, setLetterToPlay]);
 
-  useEffect(() => {
-    if (isTranslate) {
-      setShouldMountAvatar(true);
-      return;
-    }
-
-    if (shouldMountAvatar) return;
-
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    const interaction = InteractionManager.runAfterInteractions(() => {
-      timer = setTimeout(() => setShouldMountAvatar(true), AVATAR_WARMUP_DELAY_MS);
-    });
-
-    return () => {
-      if (timer) clearTimeout(timer);
-      interaction.cancel?.();
-    };
-  }, [isTranslate, shouldMountAvatar]);
-
-  if (!mountAvatar) return null;
-
   return (
     <View style={[
       styles.avatarContainer,
       {
-        top: isTranslate ? 0 : -9999,
+        opacity: isTranslate ? 1 : 0,
         pointerEvents: isTranslate ? 'auto' : 'none',
       }
     ]}>
@@ -76,8 +131,14 @@ function GlobalAvatar() {
         signToPlay={signToPlay}
         letterToPlay={letterToPlay}
         sequenceToPlay={sequenceToPlay}
-        onVRMLoaded={() => setIsAvatarLoaded(true)}
-        onError={(error) => console.error('Avatar error:', error)}
+        onVRMLoaded={() => {
+          setAvatarLoadError(null);
+          setIsAvatarLoaded(true);
+        }}
+        onError={(error) => {
+          console.error('Avatar error:', error);
+          setAvatarLoadError(error.message);
+        }}
         active={isTranslate}
         onSequenceEnd={() => {
           setSequenceToPlay(null);
@@ -92,7 +153,9 @@ function GlobalAvatar() {
 
       {isTranslate && !isAvatarLoaded && (
         <View style={styles.loadingOverlay}>
-          <Text style={styles.loadingText}>Preparing avatar...</Text>
+          <Text style={[styles.loadingText, avatarLoadError && styles.loadingErrorText]}>
+            {avatarLoadError ? 'Avatar could not load' : 'Preparing avatar...'}
+          </Text>
         </View>
       )}
     </View>
@@ -144,6 +207,7 @@ export default function TabLayout() {
           />
         </Tabs>
         <GlobalAvatar />
+        <BootLoadingOverlay />
       </View>
     </AvatarProvider>
   );
@@ -178,6 +242,9 @@ const styles = StyleSheet.create({
         fontSize: 16,
         fontWeight: 'bold',
     },
+    loadingErrorText: {
+        color: '#E57373',
+    },
     dotPatternBackground: {
         position: 'absolute',
         top: 0,
@@ -192,5 +259,11 @@ const styles = StyleSheet.create({
         height: 3,
         borderRadius: 1.5,
         backgroundColor: 'rgba(91, 196, 181, 0.18)',
+    },
+    bootOverlay: {
+        ...StyleSheet.absoluteFillObject,
+        zIndex: 300,
+        elevation: 300,
+        backgroundColor: '#FFF9F5',
     },
 });
