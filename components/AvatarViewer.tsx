@@ -111,7 +111,20 @@ const getAnimationClip = (assetFile: any): Promise<THREE.AnimationClip | null> =
                 loader.parse(glbArrayBuffer, '', (parsed: any) => resolve(parsed), (err: any) => reject(err));
             });
 
-            return gltf.animations?.[0]?.clone() ?? null;
+            const animations = gltf.animations ?? [];
+            const playableAnimations = animations.filter((clip: THREE.AnimationClip) => {
+                const clipName = clip.name.toUpperCase();
+                return (
+                    clip.tracks.length > 0 &&
+                    !clipName.startsWith('T-POSE') &&
+                    clipName !== 'FACE'
+                );
+            });
+            const selectedClip = playableAnimations.length > 0
+                ? playableAnimations[playableAnimations.length - 1]
+                : animations.find((clip: THREE.AnimationClip) => clip.tracks.length > 0);
+
+            return selectedClip?.clone() ?? null;
         } finally {
             glbArrayBufferCache.delete(assetFile);
         }
@@ -134,8 +147,6 @@ const CUSTOM_ANIMATIONS: Record<string, any> = {
     'HELLO': require('../assets/hello.glb'),
     'HOW ARE YOU': require('../assets/how_are_you.glb'),
     'KUMUSTA KA': require('../assets/how_are_you.glb'),
-    'NICE TO MEET YOU': require('../assets/nice_to_meet_you.glb'),
-    'MASAYA AKONG MAKILALA KA': require('../assets/nice_to_meet_you.glb'),
     'AUNTIE': require('../assets/auntie.glb'),
     'TITA': require('../assets/auntie.glb'),
     'IM FINE': require('../assets/im_fine.glb'),

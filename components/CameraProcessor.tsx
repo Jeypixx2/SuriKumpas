@@ -3,6 +3,7 @@ import { StyleSheet, View, Text, Dimensions, ActivityIndicator } from 'react-nat
 import { CameraView, CameraType, useCameraPermissions } from 'expo-camera';
 import { WebView } from 'react-native-webview';
 import * as FileSystem from 'expo-file-system/legacy';
+import { Buffer } from 'buffer';
 
 const CAMERA_DEBUG = false;
 const debugLog = (...args: unknown[]) => {
@@ -11,12 +12,22 @@ const debugLog = (...args: unknown[]) => {
 
 interface CameraProcessorProps {
     onKeypointsExtracted?: (keypoints: Float32Array | 'no-hands') => void;
+    onImageFrameCaptured?: (frame: CameraImageFrame) => void;
     style?: any;
     active?: boolean;
 }
 
+export interface CameraImageFrame {
+    requestId?: number;
+    width: number;
+    height: number;
+    rgb: Uint8Array;
+    channels: 3;
+}
+
 export interface CameraProcessorRef {
     captureFrame: () => void;
+    requestImageFrame: (requestId?: number) => void;
     speak: (text: string, lang?: string) => void;
 }
 
@@ -55,6 +66,127 @@ const MEDIAPIPE_SCRIPT = `
         
         function r(n) { return Math.round(n * 10000) / 10000; }
 
+        let latestHandBounds = null;
+        let alphabetCanvas = null;
+        let alphabetCtx = null;
+
+        function rememberHandBounds(results) {
+            const hands = [];
+            if (results.leftHandLandmarks && results.leftHandLandmarks.length > 0) {
+                hands.push(...results.leftHandLandmarks);
+            }
+            if (results.rightHandLandmarks && results.rightHandLandmarks.length > 0) {
+                hands.push(...results.rightHandLandmarks);
+            }
+
+            if (hands.length === 0) {
+                latestHandBounds = null;
+                return;
+            }
+
+            let minX = 1;
+            let minY = 1;
+            let maxX = 0;
+            let maxY = 0;
+            hands.forEach((lm) => {
+                minX = Math.min(minX, lm.x);
+                minY = Math.min(minY, lm.y);
+                maxX = Math.max(maxX, lm.x);
+                maxY = Math.max(maxY, lm.y);
+            });
+
+            latestHandBounds = { minX, minY, maxX, maxY, seenAt: Date.now() };
+        }
+
+        function rgbBytesToBase64(rgb) {
+            let binary = '';
+            const chunkSize = 8192;
+            for (let i = 0; i < rgb.length; i += chunkSize) {
+                const chunk = rgb.subarray(i, i + chunkSize);
+                let chunkString = '';
+                for (let j = 0; j < chunk.length; j++) {
+                    chunkString += String.fromCharCode(chunk[j]);
+                }
+                binary += chunkString;
+            }
+            return btoa(binary);
+        }
+
+        window.captureAlphabetFrame = function(requestId) {
+            try {
+                if (!videoElement || videoElement.readyState < 2) {
+                    throw new Error('Video is not ready yet.');
+                }
+
+                if (!alphabetCanvas) {
+                    alphabetCanvas = document.createElement('canvas');
+                    alphabetCanvas.width = 160;
+                    alphabetCanvas.height = 160;
+                    alphabetCtx = alphabetCanvas.getContext('2d', { willReadFrequently: true });
+                }
+
+                const videoWidth = videoElement.videoWidth || 320;
+                const videoHeight = videoElement.videoHeight || 240;
+
+                let centerX = videoWidth / 2;
+                let centerY = videoHeight / 2;
+                let cropSize = Math.min(videoWidth, videoHeight) * 0.72;
+
+                if (latestHandBounds) {
+                    const boxCenterX = ((latestHandBounds.minX + latestHandBounds.maxX) / 2) * videoWidth;
+                    const boxCenterY = ((latestHandBounds.minY + latestHandBounds.maxY) / 2) * videoHeight;
+                    const boxWidth = Math.max(1, (latestHandBounds.maxX - latestHandBounds.minX) * videoWidth);
+                    const boxHeight = Math.max(1, (latestHandBounds.maxY - latestHandBounds.minY) * videoHeight);
+
+                    centerX = boxCenterX;
+                    centerY = boxCenterY;
+                    cropSize = Math.max(boxWidth, boxHeight) * 1.8;
+                    cropSize = Math.max(cropSize, Math.min(videoWidth, videoHeight) * 0.42);
+                    cropSize = Math.min(cropSize, Math.min(videoWidth, videoHeight));
+                }
+
+                let sourceX = centerX - cropSize / 2;
+                let sourceY = centerY - cropSize / 2;
+                sourceX = Math.max(0, Math.min(sourceX, videoWidth - cropSize));
+                sourceY = Math.max(0, Math.min(sourceY, videoHeight - cropSize));
+
+                alphabetCtx.drawImage(
+                    videoElement,
+                    sourceX,
+                    sourceY,
+                    cropSize,
+                    cropSize,
+                    0,
+                    0,
+                    160,
+                    160
+                );
+
+                const rgba = alphabetCtx.getImageData(0, 0, 160, 160).data;
+                const rgb = new Uint8Array(160 * 160 * 3);
+                for (let rgbaIndex = 0, rgbIndex = 0; rgbaIndex < rgba.length; rgbaIndex += 4, rgbIndex += 3) {
+                    rgb[rgbIndex] = rgba[rgbaIndex];
+                    rgb[rgbIndex + 1] = rgba[rgbaIndex + 1];
+                    rgb[rgbIndex + 2] = rgba[rgbaIndex + 2];
+                }
+
+                window.ReactNativeWebView.postMessage(JSON.stringify({
+                    type: 'image-frame',
+                    requestId,
+                    width: 160,
+                    height: 160,
+                    channels: 3,
+                    data: rgbBytesToBase64(rgb)
+                }));
+            } catch (e) {
+                window.ReactNativeWebView.postMessage(JSON.stringify({
+                    type: 'image-frame-error',
+                    requestId,
+                    message: e.message || String(e)
+                }));
+            }
+        };
+
         function extractKeypoints(results) {
             const kp = [];
             
@@ -91,6 +223,8 @@ const MEDIAPIPE_SCRIPT = `
         }
         
         function onResults(results) {
+            rememberHandBounds(results);
+
             canvasCtx.save();
             canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
             
@@ -188,13 +322,17 @@ const MEDIAPIPE_SCRIPT = `
 `;
 
 const CameraProcessor = forwardRef<CameraProcessorRef, CameraProcessorProps>(
-    ({ onKeypointsExtracted, style, active = true }, ref) => {
+    ({ onKeypointsExtracted, onImageFrameCaptured, style, active = true }, ref) => {
         const [permission, requestPermission] = useCameraPermissions();
         const [isWebViewReady, setIsWebViewReady] = useState(false);
         const webViewRef = useRef<WebView>(null);
 
         useImperativeHandle(ref, () => ({
             captureFrame: () => {
+            },
+            requestImageFrame: (requestId?: number) => {
+                const id = typeof requestId === 'number' ? requestId : Date.now();
+                webViewRef.current?.injectJavaScript(`window.captureAlphabetFrame(${id}); true;`);
             },
             speak: (text: string, lang: string = 'fil-PH') => {
                 const js = `window.speakText("${text}", "${lang}"); true;`;
@@ -269,6 +407,17 @@ const CameraProcessor = forwardRef<CameraProcessorRef, CameraProcessorProps>(
                     onKeypointsExtracted?.(keypoints);
                 } else if (message.type === 'no-hands') {
                     onKeypointsExtracted?.('no-hands');
+                } else if (message.type === 'image-frame') {
+                    const rgb = new Uint8Array(Buffer.from(message.data, 'base64'));
+                    onImageFrameCaptured?.({
+                        requestId: message.requestId,
+                        width: message.width,
+                        height: message.height,
+                        channels: 3,
+                        rgb,
+                    });
+                } else if (message.type === 'image-frame-error') {
+                    debugLog('[CameraProcessor] Image frame error:', message.message);
                 } else if (message.type === 'log') {
                     debugLog('[WebView DOM]', message.message);
                 } else if (message.type === 'ready') {
@@ -278,7 +427,13 @@ const CameraProcessor = forwardRef<CameraProcessorRef, CameraProcessorProps>(
             } catch (error) {
                 console.error('Error parsing WebView message:', error);
             }
-        }, [onKeypointsExtracted]);
+        }, [onKeypointsExtracted, onImageFrameCaptured]);
+
+        const webViewPermissionProps = {
+            onPermissionRequest: (event: any) => {
+                event.grant();
+            }
+        } as any;
         
         if (!permission?.granted) {
             return (
@@ -303,11 +458,7 @@ const CameraProcessor = forwardRef<CameraProcessorRef, CameraProcessorProps>(
                     allowFileAccessFromFileURLs={true}
                     allowUniversalAccessFromFileURLs={true}
                     mediaCapturePermissionGrantType="grant"
-                    {...{
-                        onPermissionRequest: (event: any) => {
-                            event.grant();
-                        }
-                    }}
+                    {...webViewPermissionProps}
                     onError={(syntheticEvent) => {
                         const { nativeEvent } = syntheticEvent;
                         console.error('WebView error: ', nativeEvent);

@@ -3,6 +3,11 @@ declare module '*.tflite' {
     export default content;
 }
 
+declare module '*.txt' {
+    const content: number;
+    export default content;
+}
+
 declare module '*.vrm' {
     const content: string;
     export default content;

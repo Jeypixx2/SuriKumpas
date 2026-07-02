@@ -1,11 +1,11 @@
 import { StyleSheet, Text, View, ScrollView, TouchableOpacity, Animated, Pressable, FlatList, InteractionManager } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { FSL_LABELS, FSLLabel } from '../../lib/labels';
+import { VISIBLE_FSL_LABELS, FSLLabel } from '../../lib/labels';
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { globalClassifier } from '../../lib/SignClassifier';
 
-const CATEGORIES = Array.from(new Set(FSL_LABELS.map(l => l.category)));
+const CATEGORIES = Array.from(new Set(VISIBLE_FSL_LABELS.map(l => l.category)));
 
 type LabelListItem =
     | { type: 'header'; category: string }
@@ -73,8 +73,8 @@ export default function HomeScreen() {
     };
 
     const filteredLabels = useMemo(() => {
-        if (!selectedCategory) return FSL_LABELS;
-        return FSL_LABELS.filter(l => l.category === selectedCategory);
+        if (!selectedCategory) return VISIBLE_FSL_LABELS;
+        return VISIBLE_FSL_LABELS.filter(l => l.category === selectedCategory);
     }, [selectedCategory]);
 
     const groupedLabels = useMemo(() => {

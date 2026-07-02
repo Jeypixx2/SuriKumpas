@@ -87,6 +87,7 @@ function BootLoadingOverlay() {
 function GlobalAvatar() {
   const segments = useSegments();
   const isTranslate = segments.includes('translate');
+  const isDetect = segments.includes('detect');
   const { 
     signToPlay, setSignToPlay,
     letterToPlay, setLetterToPlay,
@@ -110,20 +111,24 @@ function GlobalAvatar() {
     ));
   }, []);
 
+  const hasPlayback = !!signToPlay || !!letterToPlay || !!(sequenceToPlay && sequenceToPlay.length > 0);
+  const shouldShowAvatar = isTranslate || hasPlayback;
+
   useEffect(() => {
-    if (!isTranslate) {
+    if (!isTranslate && !isDetect) {
       setSequenceToPlay(null);
       setSignToPlay(null);
       setLetterToPlay(null);
     }
-  }, [isTranslate, setSequenceToPlay, setSignToPlay, setLetterToPlay]);
+  }, [isTranslate, isDetect, setSequenceToPlay, setSignToPlay, setLetterToPlay]);
 
   return (
-    <View style={[
+    <View
+      pointerEvents={isTranslate ? 'auto' : 'none'}
+      style={[
       styles.avatarContainer,
       {
-        opacity: isTranslate ? 1 : 0,
-        pointerEvents: isTranslate ? 'auto' : 'none',
+        opacity: shouldShowAvatar ? 1 : 0,
       }
     ]}>
       <AvatarViewer
@@ -139,7 +144,7 @@ function GlobalAvatar() {
           console.error('Avatar error:', error);
           setAvatarLoadError(error.message);
         }}
-        active={isTranslate}
+        active={shouldShowAvatar}
         onSequenceEnd={() => {
           setSequenceToPlay(null);
           setSignToPlay(null);

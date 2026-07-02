@@ -113,6 +113,8 @@ export const FSL_LABELS: FSLLabel[] = [
     { id: 104, "english": "NO SUGAR", filipino: "WALANG ASUKAL", category: "DRINK" },
 ];
 
+export const VISIBLE_FSL_LABELS: FSLLabel[] = FSL_LABELS;
+
 export interface SequenceItem {
     type: 'sign' | 'letter';
     value: string;

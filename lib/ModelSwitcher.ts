@@ -5,15 +5,17 @@ const LH_END   = 1599;
 const RH_START = 1599;
 const RH_END   = 1662;
 
+export type DetectionMode = 'alphabet' | 'sign' | 'waiting';
+
 export class ModelSwitcher {
     private previousHandKeypoints: Float32Array | null = null;
-    private movementThreshold: number = 0.003; // More sensitive
+    private movementThreshold: number = 0.006; // Ignore small hand jitter while fingerspelling
     private stillFrameCount: number = 0;
     private movingFrameCount: number = 0;
-    private readonly stillThreshold = 3; // Faster transition
-    private readonly movingThreshold = 2; // Faster transition
+    private readonly stillThreshold = 2; // Enter alphabet mode quickly
+    private readonly movingThreshold = 5; // Require deliberate movement for word signs
 
-    detectMovement(currentKeypoints: Float32Array): { isMoving: boolean; confidence: number } {
+    detectMovement(currentKeypoints: Float32Array): { isMoving: boolean; confidence: number; mode: DetectionMode } {
         // Extract hand keypoints from both hands (126 values total)
         // We use a pre-allocated buffer if possible, but for simplicity let's at least use typed arrays
         const currentHands = new Float32Array(126);
@@ -23,7 +25,7 @@ export class ModelSwitcher {
 
         if (!this.previousHandKeypoints) {
             this.previousHandKeypoints = currentHands;
-            return { isMoving: false, confidence: 0 };
+            return { isMoving: false, confidence: 0, mode: 'waiting' };
         }
 
         const movement = this.calculateMovement(this.previousHandKeypoints, currentHands);
@@ -44,8 +46,9 @@ export class ModelSwitcher {
         let confidence = 0.5;
         if (isStill) confidence = 1.0;
         if (isMoving) confidence = 0.0;
+        const mode: DetectionMode = isStill ? 'alphabet' : isMoving ? 'sign' : 'waiting';
 
-        return { isMoving, confidence };
+        return { isMoving, confidence, mode };
     }
 
     private calculateMovement(prev: Float32Array, curr: Float32Array): number {
