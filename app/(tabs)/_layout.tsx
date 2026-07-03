@@ -87,7 +87,6 @@ function BootLoadingOverlay() {
 function GlobalAvatar() {
   const segments = useSegments();
   const isTranslate = segments.includes('translate');
-  const isDetect = segments.includes('detect');
   const { 
     signToPlay, setSignToPlay,
     letterToPlay, setLetterToPlay,
@@ -111,16 +110,15 @@ function GlobalAvatar() {
     ));
   }, []);
 
-  const hasPlayback = !!signToPlay || !!letterToPlay || !!(sequenceToPlay && sequenceToPlay.length > 0);
-  const shouldShowAvatar = isTranslate || hasPlayback;
+  const shouldShowAvatar = isTranslate;
 
   useEffect(() => {
-    if (!isTranslate && !isDetect) {
+    if (!isTranslate) {
       setSequenceToPlay(null);
       setSignToPlay(null);
       setLetterToPlay(null);
     }
-  }, [isTranslate, isDetect, setSequenceToPlay, setSignToPlay, setLetterToPlay]);
+  }, [isTranslate, setSequenceToPlay, setSignToPlay, setLetterToPlay]);
 
   return (
     <View

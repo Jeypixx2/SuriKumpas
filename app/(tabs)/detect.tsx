@@ -8,8 +8,7 @@ import ResultOverlay from '../../components/ResultOverlay';
 import { globalClassifier } from '../../lib/SignClassifier';
 import { ModelSwitcher } from '../../lib/ModelSwitcher';
 import { globalAlphabetImageClassifier } from '../../lib/AlphabetImageClassifier';
-import { getLabelById, FSLLabel, tokenizeSentence } from '../../lib/labels';
-import { useAvatarContext } from '../../lib/AvatarContext';
+import { getLabelById, FSLLabel } from '../../lib/labels';
 import { Dimensions } from 'react-native';
 
 const { width, height } = Dimensions.get('window');
@@ -34,7 +33,6 @@ export default function DetectScreen() {
     const modelSwitcherRef = useRef(new ModelSwitcher());
     const cameraRef = useRef<CameraProcessorRef>(null);
     const isFocused = useIsFocused();
-    const { setSequenceToPlay, setLetterToPlay, setSignToPlay } = useAvatarContext();
 
     const [detectedLabel, setDetectedLabel] = useState<FSLLabel | null>(null);
     const [confidence, setConfidence] = useState(0);
@@ -194,7 +192,6 @@ export default function DetectScreen() {
                 setShowResult(true);
                 setStatus(`Alphabet mode: ${result.label} (${(result.confidence * 100).toFixed(0)}%)`);
                 cameraRef.current?.speak(result.label, 'fil-PH');
-                setLetterToPlay(result.label);
                 lastDetectionRef.current = Date.now();
                 alphabetPredictionHistoryRef.current = [];
                 setTimeout(() => setShowResult(false), 2000);
@@ -208,7 +205,7 @@ export default function DetectScreen() {
             }
             isAlphabetProcessingRef.current = false;
         }
-    }, [isFocused, setLetterToPlay]);
+    }, [isFocused]);
  
     const handleKeypointsExtracted = useCallback(async (keypoints: Float32Array | 'no-hands') => {
         if (!isFocused) return;
@@ -325,9 +322,6 @@ export default function DetectScreen() {
                             setStatus(`Sign mode: ${label.filipino} (${(result.confidence * 100).toFixed(0)}%)`);
                             setDebugInfo(`Mode: Sign | Confirmed: ${label.english} (${(result.confidence * 100).toFixed(0)}%)`);
                             cameraRef.current?.speak(label.filipino, 'fil-PH');
-                            
-                            const sequence = tokenizeSentence(label.english);
-                            if (sequence.length > 0) setSequenceToPlay(sequence);
 
                             lastDetectionRef.current = now;
                             frameBufferRef.current = [];
@@ -346,7 +340,7 @@ export default function DetectScreen() {
         } finally {
             isProcessingRef.current = false;
         }
-    }, [isMirrored, setSequenceToPlay, isFocused, cancelPendingAlphabetFrame, requestAlphabetFrame]);
+    }, [isMirrored, isFocused, cancelPendingAlphabetFrame, requestAlphabetFrame]);
 
     return (
         <View style={styles.container}>
