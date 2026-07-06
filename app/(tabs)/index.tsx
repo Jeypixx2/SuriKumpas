@@ -3,7 +3,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { VISIBLE_FSL_LABELS, FSLLabel } from '../../lib/labels';
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
-import { globalClassifier } from '../../lib/SignClassifier';
+import { globalAlphabetImageClassifier } from '../../lib/AlphabetImageClassifier';
 
 const CATEGORIES = Array.from(new Set(VISIBLE_FSL_LABELS.map(l => l.category)));
 
@@ -39,20 +39,13 @@ export default function HomeScreen() {
         const timer = setTimeout(() => {
             InteractionManager.runAfterInteractions(() => {
                 (async () => {
-                    const modelLoads = [
-                        { name: 'FSL', load: () => globalClassifier.loadFSLModel() },
-                        { name: 'Alphabet', load: () => globalClassifier.loadAlphabetModel() },
-                    ];
-
-                    for (const model of modelLoads) {
-                        if (cancelled) return;
-                        try {
-                            await model.load();
-                        } catch (error) {
-                            console.warn(`[Home] Background ${model.name} model preload failed:`, error);
-                        }
-                        await wait(800);
+                    if (cancelled) return;
+                    try {
+                        await globalAlphabetImageClassifier.load();
+                    } catch (error) {
+                        console.warn('[Home] Background alphabet model preload failed:', error);
                     }
+                    await wait(800);
                 })();
             });
         }, 2500);

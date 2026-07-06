@@ -27,7 +27,7 @@ export interface CameraImageFrame {
 
 export interface CameraProcessorRef {
     captureFrame: () => void;
-    requestImageFrame: (requestId?: number) => void;
+    requestImageFrame: (requestId?: number, options?: { mirror?: boolean }) => void;
     speak: (text: string, lang?: string) => void;
 }
 
@@ -112,7 +112,7 @@ const MEDIAPIPE_SCRIPT = `
             return btoa(binary);
         }
 
-        window.captureAlphabetFrame = function(requestId) {
+        window.captureAlphabetFrame = function(requestId, mirror) {
             try {
                 if (!videoElement || videoElement.readyState < 2) {
                     throw new Error('Video is not ready yet.');
@@ -123,6 +123,8 @@ const MEDIAPIPE_SCRIPT = `
                     alphabetCanvas.width = 160;
                     alphabetCanvas.height = 160;
                     alphabetCtx = alphabetCanvas.getContext('2d', { willReadFrequently: true });
+                    alphabetCtx.imageSmoothingEnabled = true;
+                    alphabetCtx.imageSmoothingQuality = 'high';
                 }
 
                 const videoWidth = videoElement.videoWidth || 320;
@@ -150,6 +152,12 @@ const MEDIAPIPE_SCRIPT = `
                 sourceX = Math.max(0, Math.min(sourceX, videoWidth - cropSize));
                 sourceY = Math.max(0, Math.min(sourceY, videoHeight - cropSize));
 
+                alphabetCtx.save();
+                alphabetCtx.clearRect(0, 0, 160, 160);
+                if (mirror) {
+                    alphabetCtx.translate(160, 0);
+                    alphabetCtx.scale(-1, 1);
+                }
                 alphabetCtx.drawImage(
                     videoElement,
                     sourceX,
@@ -161,6 +169,7 @@ const MEDIAPIPE_SCRIPT = `
                     160,
                     160
                 );
+                alphabetCtx.restore();
 
                 const rgba = alphabetCtx.getImageData(0, 0, 160, 160).data;
                 const rgb = new Uint8Array(160 * 160 * 3);
@@ -326,13 +335,15 @@ const CameraProcessor = forwardRef<CameraProcessorRef, CameraProcessorProps>(
         const [permission, requestPermission] = useCameraPermissions();
         const [isWebViewReady, setIsWebViewReady] = useState(false);
         const webViewRef = useRef<WebView>(null);
+        const WebViewWithAndroidPermissions = WebView as React.ComponentType<any>;
 
         useImperativeHandle(ref, () => ({
             captureFrame: () => {
             },
-            requestImageFrame: (requestId?: number) => {
+            requestImageFrame: (requestId?: number, options?: { mirror?: boolean }) => {
                 const id = typeof requestId === 'number' ? requestId : Date.now();
-                webViewRef.current?.injectJavaScript(`window.captureAlphabetFrame(${id}); true;`);
+                const shouldMirror = options?.mirror === true ? 'true' : 'false';
+                webViewRef.current?.injectJavaScript(`window.captureAlphabetFrame(${id}, ${shouldMirror}); true;`);
             },
             speak: (text: string, lang: string = 'fil-PH') => {
                 const js = `window.speakText("${text}", "${lang}"); true;`;
@@ -445,7 +456,7 @@ const CameraProcessor = forwardRef<CameraProcessorRef, CameraProcessorProps>(
 
         return (
             <View style={[styles.container, style]}>
-                <WebView
+                <WebViewWithAndroidPermissions
                     ref={webViewRef}
                     style={[styles.webView, { backgroundColor: 'transparent' }]}
                     originWhitelist={['*']}
@@ -459,15 +470,15 @@ const CameraProcessor = forwardRef<CameraProcessorRef, CameraProcessorProps>(
                     allowUniversalAccessFromFileURLs={true}
                     mediaCapturePermissionGrantType="grant"
                     {...webViewPermissionProps}
-                    onError={(syntheticEvent) => {
+                    onError={(syntheticEvent: any) => {
                         const { nativeEvent } = syntheticEvent;
                         console.error('WebView error: ', nativeEvent);
                     }}
-                    onHttpError={(syntheticEvent) => {
+                    onHttpError={(syntheticEvent: any) => {
                         const { nativeEvent } = syntheticEvent;
                         console.error('WebView HTTP error: ', nativeEvent);
                     }}
-                    renderError={(errorDomain, errorCode, errorDesc) => (
+                    renderError={(errorDomain: any, errorCode: any, errorDesc: any) => (
                         <View style={[StyleSheet.absoluteFill, { backgroundColor: '#1a1a1a', justifyContent: 'center', alignItems: 'center' }]}>
                             <Text style={{ color: 'red', textAlign: 'center' }}>WebView Crashed: {errorDesc} ({errorCode})</Text>
                         </View>

@@ -9,6 +9,8 @@ import MicButton from '../../components/MicButton';
 import { tokenizeSentence } from '../../lib/labels';
 
 const normalizeSpeechText = (text: string) => text.trim().replace(/\s+/g, ' ');
+const SIGN_PARTIAL_DEBOUNCE_MS = 120;
+const FINGERSPELL_PARTIAL_DEBOUNCE_MS = 700;
 
 export default function TranslateScreen() {
     const router = useRouter();
@@ -73,12 +75,15 @@ export default function TranslateScreen() {
         clearPartialTimeout();
 
         const partialSequence = tokenizeSentence(text);
-        const isCompleteKnownSign = partialSequence.length === 1 && partialSequence[0].type === 'sign';
-        if (!isCompleteKnownSign) return;
+        if (partialSequence.length === 0) return;
 
+        const hasFingerspellingFallback = partialSequence.some(item => item.type === 'letter');
+        const debounceMs = hasFingerspellingFallback
+            ? FINGERSPELL_PARTIAL_DEBOUNCE_MS
+            : SIGN_PARTIAL_DEBOUNCE_MS;
         partialTimeoutRef.current = setTimeout(() => {
             queueSpeechForSigning(text, false);
-        }, 200);
+        }, debounceMs);
     }, [clearPartialTimeout, queueSpeechForSigning]);
 
     const onSpeechResults = useCallback((e: SpeechResultsEvent) => {

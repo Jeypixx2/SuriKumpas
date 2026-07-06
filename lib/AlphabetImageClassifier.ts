@@ -13,11 +13,20 @@ export interface AlphabetImagePrediction {
     label: string;
     confidence: number;
     index: number;
+    margin: number;
+    alternatives: AlphabetImageAlternative[];
+}
+
+export interface AlphabetImageAlternative {
+    label: string;
+    confidence: number;
+    index: number;
 }
 
 const IMAGE_SIZE = 160;
 const RGB_CHANNELS = 3;
 const INPUT_PIXEL_COUNT = IMAGE_SIZE * IMAGE_SIZE * RGB_CHANNELS;
+const TRAINING_INPUT_SHAPE = `[1, ${IMAGE_SIZE}, ${IMAGE_SIZE}, ${RGB_CHANNELS}]`;
 
 const MODEL_ASSET = require('../assets/fsl_alphabet_model.tflite');
 const LABEL_ASSET = require('../assets/labels.txt');
@@ -47,6 +56,7 @@ export class AlphabetImageClassifier {
                 }
 
                 this.model = await loadTensorflowModel({ url: modelUri }, []);
+                this.validateModelContract();
             })().finally(() => {
                 this.loadPromise = null;
             });
@@ -67,19 +77,16 @@ export class AlphabetImageClassifier {
         const outputTensor = await this.model.run([inputTensor.buffer as ArrayBuffer]);
         const probabilities = this.readOutputProbabilities(outputTensor[0]);
 
-        let bestIndex = 0;
-        let bestConfidence = -Infinity;
-        for (let i = 0; i < probabilities.length; i++) {
-            if (probabilities[i] > bestConfidence) {
-                bestConfidence = probabilities[i];
-                bestIndex = i;
-            }
-        }
+        const alternatives = this.getTopAlternatives(probabilities, 3);
+        const best = alternatives[0] ?? { label: 'CLASS_0', confidence: 0, index: 0 };
+        const secondConfidence = alternatives[1]?.confidence ?? 0;
 
         return {
-            label: this.labels[bestIndex] ?? `CLASS_${bestIndex}`,
-            confidence: bestConfidence,
-            index: bestIndex,
+            label: best.label,
+            confidence: best.confidence,
+            index: best.index,
+            margin: best.confidence - secondConfidence,
+            alternatives,
         };
     }
 
@@ -167,8 +174,9 @@ export class AlphabetImageClassifier {
 
         const tensor = new Float32Array(INPUT_PIXEL_COUNT);
         for (let i = 0; i < rgb.length; i++) {
-            // The model already contains MobileNetV2 preprocess_input.
-            // Feed raw RGB values in the normal 0..255 range.
+            // Matches the training pipeline: image_dataset_from_directory
+            // produces RGB pixels in 0..255, then the model graph applies
+            // MobileNetV2 preprocess_input internally.
             tensor[i] = rgb[i];
         }
         return tensor;
@@ -200,6 +208,63 @@ export class AlphabetImageClassifier {
 
     private getInputDataType(): string {
         return String((this.model?.inputs?.[0] as any)?.dataType ?? 'float32').toLowerCase();
+    }
+
+    private validateModelContract(): void {
+        if (!this.model) return;
+
+        const inputShape = this.getTensorShape(this.model.inputs?.[0]);
+        const outputShape = this.getTensorShape(this.model.outputs?.[0]);
+
+        if (inputShape.length >= 3) {
+            const [height, width, channels] = inputShape.slice(-3);
+            if (height !== IMAGE_SIZE || width !== IMAGE_SIZE || channels !== RGB_CHANNELS) {
+                throw new Error(
+                    `Alphabet model input shape [${inputShape.join(', ')}] does not match training shape ${TRAINING_INPUT_SHAPE}.`
+                );
+            }
+        }
+
+        const outputCount = this.getElementCount(outputShape);
+        if (outputCount > 0 && outputCount !== this.labels.length) {
+            throw new Error(
+                `Alphabet model outputs ${outputCount} classes, but labels.txt has ${this.labels.length} labels. Regenerate labels.txt from the same training folders.`
+            );
+        }
+    }
+
+    private getTensorShape(tensor: { shape?: number[] } | undefined): number[] {
+        if (!Array.isArray(tensor?.shape)) return [];
+        return tensor.shape
+            .map(dim => Number(dim))
+            .filter(dim => Number.isFinite(dim));
+    }
+
+    private getElementCount(shape: number[]): number {
+        if (shape.length === 0 || shape.some(dim => dim <= 0)) return 0;
+        return shape.reduce((count, dim) => count * dim, 1);
+    }
+
+    private getTopAlternatives(probabilities: Float32Array, limit: number): AlphabetImageAlternative[] {
+        const top: AlphabetImageAlternative[] = [];
+
+        for (let i = 0; i < probabilities.length; i++) {
+            const candidate: AlphabetImageAlternative = {
+                label: this.labels[i] ?? `CLASS_${i}`,
+                confidence: probabilities[i],
+                index: i,
+            };
+
+            const insertAt = top.findIndex(item => candidate.confidence > item.confidence);
+            if (insertAt === -1) {
+                if (top.length < limit) top.push(candidate);
+            } else {
+                top.splice(insertAt, 0, candidate);
+                if (top.length > limit) top.pop();
+            }
+        }
+
+        return top;
     }
 
     private clampByte(value: number): number {

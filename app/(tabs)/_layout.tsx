@@ -4,12 +4,11 @@ import { Ionicons } from '@expo/vector-icons';
 import { View, Text, StyleSheet } from 'react-native';
 import { AvatarProvider, useAvatarContext } from '../../lib/AvatarContext';
 import AvatarViewer from '../../components/AvatarViewer';
-import { globalClassifier } from '../../lib/SignClassifier';
+import { globalAlphabetImageClassifier } from '../../lib/AlphabetImageClassifier';
 import LoadingScreen from '../../components/LoadingScreen';
 
 const BOOT_MIN_MS = 1200;
 const BOOT_MAX_MS = 8500;
-const MODEL_LOAD_GAP_MS = 350;
 
 const wait = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 type LoadingStepStatus = 'pending' | 'loading' | 'complete' | 'error';
@@ -37,9 +36,7 @@ function BootLoadingOverlay() {
     const loadModels = async () => {
       try {
         await wait(200);
-        await globalClassifier.loadFSLModel();
-        await wait(MODEL_LOAD_GAP_MS);
-        await globalClassifier.loadAlphabetModel();
+        await globalAlphabetImageClassifier.load();
         if (!cancelled) setModelsLoaded(true);
       } catch (error) {
         console.warn('[Boot] Model preload failed:', error);

@@ -9,46 +9,103 @@ export type DetectionMode = 'alphabet' | 'sign' | 'waiting';
 
 export class ModelSwitcher {
     private previousHandKeypoints: Float32Array | null = null;
-    private movementThreshold: number = 0.006; // Ignore small hand jitter while fingerspelling
+    private smoothedHandKeypoints: Float32Array | null = null;
+    private smoothedMovement: number = 0;
+    private currentMode: DetectionMode = 'waiting';
+    private readonly landmarkSmoothingAlpha = 0.55;
+    private readonly movementSmoothingAlpha = 0.35;
+    private readonly enterMovementThreshold = 0.008;
+    private readonly exitMovementThreshold = 0.004;
     private stillFrameCount: number = 0;
     private movingFrameCount: number = 0;
-    private readonly stillThreshold = 2; // Enter alphabet mode quickly
-    private readonly movingThreshold = 5; // Require deliberate movement for word signs
+    private readonly stillThreshold = 4;
+    private readonly movingThreshold = 4;
+    private readonly signReleaseThreshold = 7;
 
     detectMovement(currentKeypoints: Float32Array): { isMoving: boolean; confidence: number; mode: DetectionMode } {
-        // Extract hand keypoints from both hands (126 values total)
-        // We use a pre-allocated buffer if possible, but for simplicity let's at least use typed arrays
-        const currentHands = new Float32Array(126);
-        let idx = 0;
-        for (let i = LH_START; i < LH_END; i++) currentHands[idx++] = currentKeypoints[i];
-        for (let i = RH_START; i < RH_END; i++) currentHands[idx++] = currentKeypoints[i];
+        const currentHands = this.extractHands(currentKeypoints);
+        const stableHands = this.smoothHands(currentHands);
 
         if (!this.previousHandKeypoints) {
-            this.previousHandKeypoints = currentHands;
+            this.previousHandKeypoints = stableHands;
             return { isMoving: false, confidence: 0, mode: 'waiting' };
         }
 
-        const movement = this.calculateMovement(this.previousHandKeypoints, currentHands);
-        this.previousHandKeypoints = currentHands;
+        const movement = this.calculateMovement(this.previousHandKeypoints, stableHands);
+        this.previousHandKeypoints = stableHands;
+        this.smoothedMovement = this.smoothedMovement === 0
+            ? movement
+            : this.smoothedMovement + (movement - this.smoothedMovement) * this.movementSmoothingAlpha;
 
-        if (movement > this.movementThreshold) {
+        const threshold = this.currentMode === 'sign'
+            ? this.exitMovementThreshold
+            : this.enterMovementThreshold;
+        const movementFrame = this.smoothedMovement > threshold;
+
+        if (movementFrame) {
             this.movingFrameCount++;
             this.stillFrameCount = 0;
         } else {
             this.stillFrameCount++;
-            this.movingFrameCount = 0;
+            this.movingFrameCount = Math.max(0, this.movingFrameCount - 1);
         }
 
-        const isMoving = this.movingFrameCount >= this.movingThreshold;
-        const isStill = this.stillFrameCount >= this.stillThreshold;
+        if (this.currentMode === 'sign') {
+            if (this.stillFrameCount >= this.signReleaseThreshold) {
+                this.currentMode = 'alphabet';
+                this.movingFrameCount = 0;
+            }
+        } else if (this.movingFrameCount >= this.movingThreshold) {
+            this.currentMode = 'sign';
+            this.stillFrameCount = 0;
+        } else if (this.stillFrameCount >= this.stillThreshold) {
+            this.currentMode = 'alphabet';
+        }
 
-        // Confidence: 1.0 = Still, 0.0 = Moving
-        let confidence = 0.5;
-        if (isStill) confidence = 1.0;
-        if (isMoving) confidence = 0.0;
-        const mode: DetectionMode = isStill ? 'alphabet' : isMoving ? 'sign' : 'waiting';
+        const confidence = Math.max(
+            0,
+            Math.min(1, 1 - (this.smoothedMovement / this.enterMovementThreshold))
+        );
 
-        return { isMoving, confidence, mode };
+        return {
+            isMoving: this.currentMode === 'sign',
+            confidence,
+            mode: this.currentMode,
+        };
+    }
+
+    private extractHands(currentKeypoints: Float32Array): Float32Array {
+        const currentHands = new Float32Array(126);
+        let idx = 0;
+        for (let i = LH_START; i < LH_END; i++) currentHands[idx++] = currentKeypoints[i];
+        for (let i = RH_START; i < RH_END; i++) currentHands[idx++] = currentKeypoints[i];
+        return currentHands;
+    }
+
+    private smoothHands(current: Float32Array): Float32Array {
+        if (!this.smoothedHandKeypoints) {
+            this.smoothedHandKeypoints = current;
+            return current;
+        }
+
+        const smoothed = new Float32Array(current.length);
+        for (let i = 0; i < current.length; i += 3) {
+            const hasCurrent = this.hasLandmark(current, i);
+            const hasPrevious = this.hasLandmark(this.smoothedHandKeypoints, i);
+
+            if (hasCurrent && hasPrevious) {
+                smoothed[i] = this.smoothedHandKeypoints[i] + (current[i] - this.smoothedHandKeypoints[i]) * this.landmarkSmoothingAlpha;
+                smoothed[i + 1] = this.smoothedHandKeypoints[i + 1] + (current[i + 1] - this.smoothedHandKeypoints[i + 1]) * this.landmarkSmoothingAlpha;
+                smoothed[i + 2] = this.smoothedHandKeypoints[i + 2] + (current[i + 2] - this.smoothedHandKeypoints[i + 2]) * this.landmarkSmoothingAlpha;
+            } else {
+                smoothed[i] = current[i];
+                smoothed[i + 1] = current[i + 1];
+                smoothed[i + 2] = current[i + 2];
+            }
+        }
+
+        this.smoothedHandKeypoints = smoothed;
+        return smoothed;
     }
 
     private calculateMovement(prev: Float32Array, curr: Float32Array): number {
@@ -56,12 +113,9 @@ export class ModelSwitcher {
         let count = 0;
 
         for (let i = 0; i < prev.length; i += 3) {
-            // Only compare if the landmark is detected (not 0,0,0)
-            if (prev[i] !== 0 && curr[i] !== 0) {
+            if (this.hasLandmark(prev, i) && this.hasLandmark(curr, i)) {
                 const dx = prev[i] - curr[i];
                 const dy = prev[i+1] - curr[i+1];
-                // Manually calculate hypotenuse to avoid Math.sqrt overhead if possible, 
-                // but sqrt is likely fine here.
                 totalDiff += Math.sqrt(dx*dx + dy*dy);
                 count++;
             }
@@ -70,8 +124,15 @@ export class ModelSwitcher {
         return count > 0 ? totalDiff / count : 0;
     }
 
+    private hasLandmark(values: Float32Array, index: number): boolean {
+        return values[index] !== 0 || values[index + 1] !== 0 || values[index + 2] !== 0;
+    }
+
     reset() {
         this.previousHandKeypoints = null;
+        this.smoothedHandKeypoints = null;
+        this.smoothedMovement = 0;
+        this.currentMode = 'waiting';
         this.stillFrameCount = 0;
         this.movingFrameCount = 0;
     }

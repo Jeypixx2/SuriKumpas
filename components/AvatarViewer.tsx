@@ -48,10 +48,10 @@ import { AvatarAnimator } from '../lib/AvatarAnimator';
 import { SequenceItem } from '../lib/labels';
 
 const AVATAR_TARGET_FRAME_MS = 33;
-const LETTER_PRELOAD_DELAY_MS = 8500;
-const ACTIVE_SIGN_PRELOAD_DELAY_MS = 10000;
-const INACTIVE_SIGN_PRELOAD_DELAY_MS = 25000;
-const BACKGROUND_PRELOAD_GAP_MS = 2000;
+const LETTER_PRELOAD_DELAY_MS = 1200;
+const ACTIVE_SIGN_PRELOAD_DELAY_MS = 900;
+const INACTIVE_SIGN_PRELOAD_DELAY_MS = 9000;
+const BACKGROUND_PRELOAD_GAP_MS = 450;
 
 const glbArrayBufferCache = new Map<any, Promise<ArrayBuffer>>();
 const animationClipCache = new Map<any, Promise<THREE.AnimationClip | null>>();
@@ -155,6 +155,9 @@ const CUSTOM_ANIMATIONS: Record<string, any> = {
     'MABUTI': require('../assets/im_fine.glb'),
     'THANK YOU': require('../assets/thank_you.glb'),
     'SALAMAT': require('../assets/thank_you.glb'),
+    'SEE YOU TOMORROW': require('../assets/see_you_tommorow.glb'),
+    'SEE YOU TOMMOROW': require('../assets/see_you_tommorow.glb'),
+    'KITA TAYO BUKAS': require('../assets/see_you_tommorow.glb'),
     "DON'T UNDERSTAND": require('../assets/dont_understand.glb'),
     'DONT UNDERSTAND': require('../assets/dont_understand.glb'),
     'HINDI NAINTINDIHAN': require('../assets/dont_understand.glb'),
@@ -167,12 +170,18 @@ const CUSTOM_ANIMATIONS: Record<string, any> = {
     'HINDI': require('../assets/no.glb'),
     'CORRECT': require('../assets/correct.glb'),
     'TAMA': require('../assets/correct.glb'),
+    'SLOW': require('../assets/slow.glb'),
+    'MABAGAL': require('../assets/slow.glb'),
     'FAST': require('../assets/fast.glb'),
     'MABILIS': require('../assets/fast.glb'),
     'FOUR': require('../assets/four.glb'),
     'APAT': require('../assets/four.glb'),
     'FIVE': require('../assets/five.glb'),
     'LIMA': require('../assets/five.glb'),
+    'SIX': require('../assets/six.glb'),
+    'ANIM': require('../assets/six.glb'),
+    'SEVEN': require('../assets/seven.glb'),
+    'PITO': require('../assets/seven.glb'),
     'EIGHT': require('../assets/eight.glb'),
     'WALO': require('../assets/eight.glb'),
     'NINE': require('../assets/nine.glb'),
@@ -193,6 +202,8 @@ const CUSTOM_ANIMATIONS: Record<string, any> = {
     'HULYO': require('../assets/july.glb'),
     'AUGUST': require('../assets/august.glb'),
     'AGOSTO': require('../assets/august.glb'),
+    'SEPTEMBER': require('../assets/september.glb'),
+    'SETYEMBRE': require('../assets/september.glb'),
     'OCTOBER': require('../assets/october.glb'),
     'OKTUBRE': require('../assets/october.glb'),
     'NOVEMBER': require('../assets/november.glb'),
@@ -205,10 +216,14 @@ const CUSTOM_ANIMATIONS: Record<string, any> = {
     'BIYERNES': require('../assets/friday.glb'),
     'SATURDAY': require('../assets/saturday.glb'),
     'SABADO': require('../assets/saturday.glb'),
+    'SUNDAY': require('../assets/sunday.glb'),
+    'LINGGO': require('../assets/sunday.glb'),
     'FATHER': require('../assets/father.glb'),
     'AMA': require('../assets/father.glb'),
     'MOTHER': require('../assets/mother.glb'),
     'INA': require('../assets/mother.glb'),
+    'SON': require('../assets/son.glb'),
+    'ANAK NA LALAKI': require('../assets/son.glb'),
     'DAUGHTER': require('../assets/daughter.glb'),
     'ANAK NA BABAE': require('../assets/daughter.glb'),
     'GRANDFATHER': require('../assets/grandfather.glb'),
@@ -262,10 +277,14 @@ const CUSTOM_ANIMATIONS: Record<string, any> = {
     'KARNE': require('../assets/meat.glb'),
     'CHICKEN': require('../assets/chicken.glb'),
     'MANOK': require('../assets/chicken.glb'),
+    'SPAGHETTI': require('../assets/spaghetti.glb'),
+    'ISPAGETI': require('../assets/spaghetti.glb'),
     'RICE': require('../assets/rice.glb'),
     'KANIN': require('../assets/rice.glb'),
     'LONGANISA': require('../assets/longanisa.glb'),
     'LONGGANISA': require('../assets/longanisa.glb'),
+    'SHRIMP': require('../assets/shrimp.glb'),
+    'HIPON': require('../assets/shrimp.glb'),
     'CRAB': require('../assets/crab.glb'),
     'ALIMANGO': require('../assets/crab.glb'),
     'HOT': require('../assets/hot.glb'),
@@ -280,6 +299,8 @@ const CUSTOM_ANIMATIONS: Record<string, any> = {
     'BIRA': require('../assets/beer.glb'),
     'MILK': require('../assets/milk.glb'),
     'GATAS': require('../assets/milk.glb'),
+    'SUGAR': require('../assets/sugar.glb'),
+    'ASUKAL': require('../assets/sugar.glb'),
     'NO SUGAR': require('../assets/no_sugar.glb'),
     'WALANG ASUKAL': require('../assets/no_sugar.glb'),
 };
@@ -304,7 +325,21 @@ const CUSTOM_LETTERS: Record<string, any> = {
 };
 
 const PRIORITY_SIGN_PRELOADS = [
+    'HELLO',
+    'THANK YOU',
+    'GOOD MORNING',
+    'GOOD AFTERNOON',
     'GOOD EVENING',
+    'HOW ARE YOU',
+    'IM FINE',
+    "DON'T KNOW",
+    "DON'T UNDERSTAND",
+    'KNOW',
+    'NO',
+    'CORRECT',
+    'FAST',
+    'FATHER',
+    'MOTHER',
 ];
 
 // Apply Polyfills for all Three.js Loaders to intercept and prevent native execution hangs
@@ -682,9 +717,7 @@ export default function AvatarViewer({
                 .map(item => item.value.toUpperCase())
         ));
 
-        for (const sign of signs) {
-            await ensureAnimationLoaded(sign, false, animator);
-        }
+        await Promise.all(signs.map(sign => ensureAnimationLoaded(sign, false, animator)));
     };
 
     const preloadPrioritySignAnimations = (animator: AvatarAnimator) => {

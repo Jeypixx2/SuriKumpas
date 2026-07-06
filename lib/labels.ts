@@ -111,6 +111,7 @@ export const FSL_LABELS: FSLLabel[] = [
     { id: 102, "english": "WINE", filipino: "ALAK", category: "DRINK" },
     { id: 103, "english": "SUGAR", filipino: "ASUKAL", category: "DRINK" },
     { id: 104, "english": "NO SUGAR", filipino: "WALANG ASUKAL", category: "DRINK" },
+    { id: 105, english: "GOOD AFTERNOON", filipino: "MAGANDANG HAPON", category: "GREETING" },
 ];
 
 export const VISIBLE_FSL_LABELS: FSLLabel[] = FSL_LABELS;
@@ -154,6 +155,7 @@ export function tokenizeSentence(sentence: string): SequenceItem[] {
     normalized = normalized.replace(/\bYOU'RE\b/g, 'YOURE');
     normalized = normalized.replace(/\bDONT\b/g, "DON'T");
     normalized = normalized.replace(/\bDO\s+NOT\b/g, "DON'T");
+    normalized = normalized.replace(/\bGOOD\s+AFTER\s+NOON\b/g, 'GOOD AFTERNOON');
     // Specifically handle "KAMUSTA" -> "KUMUSTA KA"
     normalized = normalized.replace(/\bKAMUSTA\b/g, 'KUMUSTA KA');
     // Ensure "KUMUSTA" matches "KUMUSTA KA" if it's a standalone word
