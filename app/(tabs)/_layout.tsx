@@ -5,6 +5,7 @@ import { View, Text, StyleSheet } from 'react-native';
 import { AvatarProvider, useAvatarContext } from '../../lib/AvatarContext';
 import AvatarViewer from '../../components/AvatarViewer';
 import { globalAlphabetImageClassifier } from '../../lib/AlphabetImageClassifier';
+import { globalClassifier } from '../../lib/SignClassifier';
 import LoadingScreen from '../../components/LoadingScreen';
 
 const BOOT_MIN_MS = 1200;
@@ -34,13 +35,31 @@ function BootLoadingOverlay() {
     let cancelled = false;
 
     const loadModels = async () => {
-      try {
-        await wait(200);
-        await globalAlphabetImageClassifier.load();
-        if (!cancelled) setModelsLoaded(true);
-      } catch (error) {
-        console.warn('[Boot] Model preload failed:', error);
-        if (!cancelled) setModelsFailed(true);
+      await wait(200);
+      const results = await Promise.allSettled([
+        globalAlphabetImageClassifier.load(),
+        globalClassifier.loadFSLModel(),
+      ]);
+
+      const alphabetResult = results[0];
+      const wordResult = results[1];
+
+      if (alphabetResult.status === 'fulfilled') {
+        console.log('[Boot] Alphabet classifier preloaded.');
+      } else {
+        console.warn('[Boot] Alphabet classifier preload failed:', alphabetResult.reason);
+      }
+
+      if (wordResult.status === 'fulfilled') {
+        console.log('[Boot] Word SignClassifier preloaded.');
+      } else {
+        console.warn('[Boot] Word SignClassifier preload failed:', wordResult.reason);
+      }
+
+      if (!cancelled) {
+        const allFailed = results.every(result => result.status === 'rejected');
+        setModelsLoaded(true);
+        setModelsFailed(allFailed);
       }
     };
 
@@ -52,14 +71,14 @@ function BootLoadingOverlay() {
   }, []);
 
   const modelStepDone = modelsLoaded || modelsFailed;
-  const avatarStepDone = isAvatarLoaded || !!avatarLoadError;
+  const avatarStepDone = isAvatarLoaded || !!avatarLoadError || timedOut;
   const ready = minimumElapsed && avatarStepDone && modelStepDone;
-  if (ready || timedOut) return null;
+  if (ready) return null;
 
   const steps: { label: string; status: LoadingStepStatus }[] = [
     {
       label: '3D avatar',
-      status: avatarLoadError ? 'error' : isAvatarLoaded ? 'complete' : 'loading',
+      status: avatarLoadError ? 'error' : isAvatarLoaded ? 'complete' : timedOut ? 'pending' : 'loading',
     },
     {
       label: 'Recognition models',

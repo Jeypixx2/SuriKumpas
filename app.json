@@ -50,9 +50,14 @@
         {
           "assets": [
             "./assets/fsl_model.tflite",
-            "./assets/alphabet_model.tflite",
             "./assets/fsl_alphabet_model.tflite",
             "./assets/labels.txt",
+            "./assets/model/fsl_model.tflite",
+            "./assets/model/sign_model1.tflite",
+            "./assets/model/labels.txt",
+            "./assets/model/label_mapping.json",
+            "./assets/model/mean.json",
+            "./assets/model/std.json",
             "./assets/avatar3.vrm",
             "./assets/a.glb",
             "./assets/april.glb",

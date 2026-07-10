@@ -3,6 +3,19 @@ const path = require('path');
 
 const config = getDefaultConfig(__dirname);
 
+const existingBlockList = Array.isArray(config.resolver.blockList)
+    ? config.resolver.blockList
+    : config.resolver.blockList
+        ? [config.resolver.blockList]
+        : [];
+
+config.resolver.blockList = [
+    ...existingBlockList,
+    // Native build folders are generated and can disappear while Metro watches them.
+    /[/\\]android[/\\].*[/\\]build[/\\]/,
+    /[/\\]\.expo[/\\]devices\.json(?:\..*)?$/,
+];
+
 // 1. Disable package exports to fix Three.js warnings (and prevent resolution issues)
 config.resolver.unstable_enablePackageExports = false;
 

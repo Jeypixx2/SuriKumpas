@@ -27,6 +27,8 @@ const IMAGE_SIZE = 160;
 const RGB_CHANNELS = 3;
 const INPUT_PIXEL_COUNT = IMAGE_SIZE * IMAGE_SIZE * RGB_CHANNELS;
 const TRAINING_INPUT_SHAPE = `[1, ${IMAGE_SIZE}, ${IMAGE_SIZE}, ${RGB_CHANNELS}]`;
+export const ALPHABET_MODEL_ASSET_PATH = 'assets/fsl_alphabet_model.tflite';
+export const ALPHABET_LABELS_ASSET_PATH = 'assets/labels.txt';
 
 const MODEL_ASSET = require('../assets/fsl_alphabet_model.tflite');
 const LABEL_ASSET = require('../assets/labels.txt');
@@ -41,22 +43,40 @@ export class AlphabetImageClassifier {
 
         if (!this.loadPromise) {
             this.loadPromise = (async () => {
-                const [modelUri, labelsText] = await Promise.all([
-                    this.getLocalAssetUri(MODEL_ASSET, 'fsl_alphabet_model.tflite'),
-                    this.readTextAsset(LABEL_ASSET, 'labels.txt'),
-                ]);
+                try {
+                    console.log(`[AlphabetImageClassifier] Loading alphabet model from ${ALPHABET_MODEL_ASSET_PATH}`);
+                    const [modelUri, labelsText] = await Promise.all([
+                        this.getLocalAssetUri(MODEL_ASSET, 'fsl_alphabet_model.tflite'),
+                        this.readTextAsset(LABEL_ASSET, 'labels.txt'),
+                    ]);
 
-                this.labels = labelsText
-                    .split(/\r?\n/)
-                    .map(label => label.trim())
-                    .filter(Boolean);
+                    this.labels = labelsText
+                        .split(/\r?\n/)
+                        .map(label => label.trim())
+                        .filter(Boolean);
 
-                if (this.labels.length === 0) {
-                    throw new Error('labels.txt is empty. Add one label per line.');
+                    if (this.labels.length === 0) {
+                        throw new Error('labels.txt is empty. Add one label per line.');
+                    }
+
+                    console.log(`[AlphabetImageClassifier] Alphabet labels loaded: ${this.labels.length}`);
+                    this.model = await loadTensorflowModel({ url: modelUri }, []);
+                    this.validateModelContract();
+                    console.log('[AlphabetImageClassifier] Alphabet classifier loaded.', {
+                        inputs: this.model.inputs,
+                        outputs: this.model.outputs,
+                    });
+                } catch (error: any) {
+                    console.warn(
+                        `[AlphabetImageClassifier] Alphabet model file is missing or could not be loaded from ${ALPHABET_MODEL_ASSET_PATH}.`,
+                        error
+                    );
+                    throw new Error(
+                        `Alphabet model file is missing or could not be loaded. ` +
+                        `Restore ${ALPHABET_MODEL_ASSET_PATH} and ${ALPHABET_LABELS_ASSET_PATH}. ` +
+                        `Details: ${error?.message || String(error)}`
+                    );
                 }
-
-                this.model = await loadTensorflowModel({ url: modelUri }, []);
-                this.validateModelContract();
             })().finally(() => {
                 this.loadPromise = null;
             });

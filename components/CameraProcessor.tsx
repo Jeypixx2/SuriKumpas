@@ -1,6 +1,6 @@
 import React, { useRef, useEffect, useState, useCallback, forwardRef, useImperativeHandle } from 'react';
-import { StyleSheet, View, Text, Dimensions, ActivityIndicator } from 'react-native';
-import { CameraView, CameraType, useCameraPermissions } from 'expo-camera';
+import { StyleSheet, View, Text } from 'react-native';
+import { useCameraPermissions } from 'expo-camera';
 import { WebView } from 'react-native-webview';
 import * as FileSystem from 'expo-file-system/legacy';
 import { Buffer } from 'buffer';
@@ -13,6 +13,8 @@ const debugLog = (...args: unknown[]) => {
 interface CameraProcessorProps {
     onKeypointsExtracted?: (keypoints: Float32Array | 'no-hands') => void;
     onImageFrameCaptured?: (frame: CameraImageFrame) => void;
+    onReady?: () => void;
+    onError?: (message: string) => void;
     style?: any;
     active?: boolean;
 }
@@ -249,14 +251,6 @@ const MEDIAPIPE_SCRIPT = `
             
             canvasCtx.restore();
 
-            const lh = results.leftHandLandmarks || [];
-            const rh = results.rightHandLandmarks || [];
-            
-            if (lh.length === 0 && rh.length === 0) {
-                window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'no-hands' }));
-                return;
-            }
-            
             window.ReactNativeWebView.postMessage(JSON.stringify({
                 type: 'keypoints',
                 data: extractKeypoints(results)
@@ -292,13 +286,13 @@ const MEDIAPIPE_SCRIPT = `
                 await videoElement.play();
                 log('Front camera ready');
 
-                // 15fps frame loop (approx 1.3 seconds to accumulate 20 frames for FSL classification)
+                // 30fps target for real-time word recognition windows.
                 window.isTicking = false;
                 async function tick() {
                     if (!window.isTicking) return;
 
                     const now = Date.now();
-                    if (!isProcessing && (!window.lastTick || now - window.lastTick > 66)) {
+                    if (!isProcessing && (!window.lastTick || now - window.lastTick > 33)) {
                         isProcessing = true;
                         window.lastTick = now;
                         try { await holistic.send({ image: videoElement }); }
@@ -331,7 +325,7 @@ const MEDIAPIPE_SCRIPT = `
 `;
 
 const CameraProcessor = forwardRef<CameraProcessorRef, CameraProcessorProps>(
-    ({ onKeypointsExtracted, onImageFrameCaptured, style, active = true }, ref) => {
+    ({ onKeypointsExtracted, onImageFrameCaptured, onReady, onError, style, active = true }, ref) => {
         const [permission, requestPermission] = useCameraPermissions();
         const [isWebViewReady, setIsWebViewReady] = useState(false);
         const webViewRef = useRef<WebView>(null);
@@ -341,21 +335,34 @@ const CameraProcessor = forwardRef<CameraProcessorRef, CameraProcessorProps>(
             captureFrame: () => {
             },
             requestImageFrame: (requestId?: number, options?: { mirror?: boolean }) => {
+                if (!isWebViewReady) {
+                    onError?.('Camera is still starting.');
+                    return;
+                }
+
                 const id = typeof requestId === 'number' ? requestId : Date.now();
                 const shouldMirror = options?.mirror === true ? 'true' : 'false';
                 webViewRef.current?.injectJavaScript(`window.captureAlphabetFrame(${id}, ${shouldMirror}); true;`);
             },
             speak: (text: string, lang: string = 'fil-PH') => {
-                const js = `window.speakText("${text}", "${lang}"); true;`;
+                if (!isWebViewReady) return;
+
+                const js = `window.speakText(${JSON.stringify(text)}, ${JSON.stringify(lang)}); true;`;
                 webViewRef.current?.injectJavaScript(js);
             }
-        }));
+        }), [isWebViewReady, onError]);
 
         useEffect(() => {
             if (!permission?.granted) {
                 requestPermission();
             }
         }, [permission, requestPermission]);
+
+        useEffect(() => {
+            if (permission && !permission.granted && permission.canAskAgain === false) {
+                onError?.('Camera permission is required.');
+            }
+        }, [permission, onError]);
 
         useEffect(() => {
             if (isWebViewReady) {
@@ -429,16 +436,21 @@ const CameraProcessor = forwardRef<CameraProcessorRef, CameraProcessorProps>(
                     });
                 } else if (message.type === 'image-frame-error') {
                     debugLog('[CameraProcessor] Image frame error:', message.message);
+                    onError?.(message.message || 'Camera frame is not ready yet.');
                 } else if (message.type === 'log') {
                     debugLog('[WebView DOM]', message.message);
+                    if (typeof message.message === 'string' && message.message.startsWith('Init failed:')) {
+                        onError?.(message.message);
+                    }
                 } else if (message.type === 'ready') {
                     debugLog('[CameraProcessor] WebView Ready Signal Received');
                     setIsWebViewReady(true);
+                    onReady?.();
                 }
             } catch (error) {
                 console.error('Error parsing WebView message:', error);
             }
-        }, [onKeypointsExtracted, onImageFrameCaptured]);
+        }, [onKeypointsExtracted, onImageFrameCaptured, onReady, onError]);
 
         const webViewPermissionProps = {
             onPermissionRequest: (event: any) => {

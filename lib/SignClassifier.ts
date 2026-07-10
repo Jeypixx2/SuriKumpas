@@ -1,227 +1,476 @@
-import { FSL_LABELS, ALPHABET_LABELS } from './labels';
 import { loadTensorflowModel, TensorflowModel } from 'react-native-fast-tflite';
 import { Asset } from 'expo-asset';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
+import { Buffer } from 'buffer';
 
-const CLASSIFIER_DEBUG = false;
-const debugLog = (...args: unknown[]) => {
-    if (CLASSIFIER_DEBUG) console.log(...args);
-};
+export interface FSLWordPrediction {
+    label: string;
+    labelIndex: number;
+    confidence: number;
+    probabilities: number[];
+}
 
-// Landmark index offsets matching extractKeypoints.ts order (Standard MediaPipe):
-// Pose: 0..131, Face: 132..1535, LH: 1536..1598, RH: 1599..1661
-const POSE_START = 0;
-const FACE_START = 33 * 4;                        // 132
-const LH_START   = FACE_START + 468 * 3;          // 1536
-const RH_START   = LH_START + 21 * 3;            // 1599
+export const WORD_MODEL_ASSET_PATH = 'assets/model/sign_model1.tflite';
+export const WORD_LABEL_MAPPING_ASSET_PATH = 'assets/model/label_mapping.json';
+export const WORD_FRAME_SIZE = 258;
+export const DEFAULT_WORD_SEQUENCE_LENGTH = 30;
+export const SUPPORTED_WORD_SEQUENCE_LENGTHS = new Set([30]);
+
+const WORD_MODEL_ASSET = require('../assets/model/sign_model1.tflite');
+const WORD_LABEL_MAPPING_ASSET = require('../assets/model/label_mapping.json');
+const SELECT_TF_OP_PREFIX = 'Flex';
+const WORD_CLASSIFIER_LOG_INTERVAL = 10;
+
+interface TfliteModelInspection {
+    inputShape: number[];
+    customOps: string[];
+}
 
 export class SignClassifier {
     private fslModel: TensorflowModel | null = null;
-    private alphabetModel: TensorflowModel | null = null;
     private fslLoadPromise: Promise<void> | null = null;
-    private alphabetLoadPromise: Promise<void> | null = null;
+    private wordLabels: string[] = [];
+    private wordSequenceLength = DEFAULT_WORD_SEQUENCE_LENGTH;
+    private wordInputShape: number[] = [];
+    private inferenceLogCounter = 0;
 
-    // Helper to ensure the asset is on the local filesystem with a 'file://' URI
-    // react-native-fast-tflite's java.net.URL fails on Android if it's an asset:// or res:// URI
-    private async getLocalModelUri(module: any, filename: string): Promise<string> {
+    private getCachedAssetFilename(asset: Asset, filename: string): string {
+        if (!asset.hash) return filename;
+
+        const extensionIndex = filename.lastIndexOf('.');
+        if (extensionIndex <= 0) return `${filename}-${asset.hash}`;
+
+        return `${filename.slice(0, extensionIndex)}-${asset.hash}${filename.slice(extensionIndex)}`;
+    }
+
+    // react-native-fast-tflite needs a local file:// URI on Android.
+    private async getLocalAssetUri(module: number, filename: string): Promise<string> {
         const [asset] = await Asset.loadAsync(module);
         if (asset.localUri && asset.localUri.startsWith('file://')) {
             return asset.localUri;
         }
-        
-        const destPath = (FileSystem as any).documentDirectory + filename;
-        const info = await FileSystem.getInfoAsync(destPath);
-        if (!info.exists) {
-            await FileSystem.downloadAsync(asset.uri, destPath);
+
+        const baseDir = FileSystem.documentDirectory ?? FileSystem.cacheDirectory;
+        if (!baseDir) {
+            throw new Error('No writable directory is available for bundled model assets.');
         }
-        return destPath;
+
+        const destination = baseDir + this.getCachedAssetFilename(asset, filename);
+        const info = await FileSystem.getInfoAsync(destination);
+        if (info.exists && !asset.hash) {
+            await FileSystem.deleteAsync(destination, { idempotent: true });
+        }
+        if (!info.exists || !asset.hash) {
+            await FileSystem.downloadAsync(asset.uri, destination);
+        }
+        return destination;
+    }
+
+    private async readTextAsset(module: number, filename: string): Promise<string> {
+        const uri = await this.getLocalAssetUri(module, filename);
+        return FileSystem.readAsStringAsync(uri);
+    }
+
+    private async readJsonAsset(module: unknown, filename: string): Promise<unknown> {
+        if (typeof module === 'number') {
+            const text = await this.readTextAsset(module, filename);
+            return JSON.parse(text);
+        }
+
+        if (typeof module === 'string') {
+            return JSON.parse(module);
+        }
+
+        const maybeDefault = (module as any)?.default;
+        if (maybeDefault && typeof maybeDefault === 'object') {
+            return maybeDefault;
+        }
+
+        return module;
     }
 
     async loadFSLModel(): Promise<void> {
-        if (this.fslModel !== null) {
-            debugLog('[TFLite] FSL model already loaded.');
+        if (this.fslModel && this.wordLabels.length > 0) {
+            console.log('[SignClassifier] Word SignClassifier already loaded.');
             return;
         }
+
         if (!this.fslLoadPromise) {
             this.fslLoadPromise = (async () => {
                 try {
-                    const uri = await this.getLocalModelUri(require('../assets/fsl_model.tflite'), 'fsl_model.tflite');
-                    this.fslModel = await loadTensorflowModel({ url: uri }, []);
-                    debugLog('[TFLite] FSL model loaded. Inputs:', this.fslModel.inputs);
-                } catch (e) {
-                    console.error('[TFLite] Failed to load FSL model', e);
-                    throw e; // rethrow to be caught in UI if needed
+                    console.log(`[SignClassifier] Loading word model from ${WORD_MODEL_ASSET_PATH}`);
+                    const [modelUri, labelMapping] = await Promise.all([
+                        this.getLocalAssetUri(WORD_MODEL_ASSET, 'sign_model1.tflite'),
+                        this.readJsonAsset(WORD_LABEL_MAPPING_ASSET, 'label_mapping.json'),
+                    ]);
+
+                    this.wordLabels = this.parseLabelMapping(labelMapping);
+                    const modelInspection = await this.inspectLocalTfliteModel(modelUri);
+                    this.applyWordInputShape(modelInspection.inputShape, 'preflight');
+                    this.validateSupportedCustomOps(modelInspection.customOps);
+
+                    console.log(
+                        `[SignClassifier] label_mapping loaded from ${WORD_LABEL_MAPPING_ASSET_PATH} ` +
+                        `(${this.wordLabels.length}): ${this.wordLabels.join(' | ')}`
+                    );
+
+                    this.fslModel = await loadTensorflowModel({ url: modelUri }, []);
+                    this.validateWordModelContract();
+                    console.log('[SignClassifier] Word FSL model loaded.', {
+                        modelPath: WORD_MODEL_ASSET_PATH,
+                        labelMappingPath: WORD_LABEL_MAPPING_ASSET_PATH,
+                        inputShape: this.wordInputShape,
+                        maxSequenceLength: this.wordSequenceLength,
+                        inputs: this.fslModel.inputs,
+                        outputs: this.fslModel.outputs,
+                    });
+                } catch (error: any) {
+                    console.error('[SignClassifier] Failed to load word FSL model.', error);
+                    throw new Error(
+                        `Word model could not be loaded from ${WORD_MODEL_ASSET_PATH}. ` +
+                        `Make sure ${WORD_LABEL_MAPPING_ASSET_PATH} is present and matches the model output. ` +
+                        `Details: ${error?.message || String(error)}`
+                    );
                 } finally {
                     this.fslLoadPromise = null;
                 }
             })();
         }
+
         return this.fslLoadPromise;
-    }
- 
-    async loadAlphabetModel(): Promise<void> {
-        if (this.alphabetModel !== null) {
-            debugLog('[TFLite] Alphabet model already loaded.');
-            return;
-        }
-        if (!this.alphabetLoadPromise) {
-            this.alphabetLoadPromise = (async () => {
-                try {
-                    const uri = await this.getLocalModelUri(require('../assets/alphabet_model.tflite'), 'alphabet_model.tflite');
-                    this.alphabetModel = await loadTensorflowModel({ url: uri }, []);
-                    debugLog('[TFLite] Alphabet model loaded. Inputs:', this.alphabetModel.inputs);
-                } catch (e) {
-                    console.error('[TFLite] Failed to load Alphabet model', e);
-                    throw e; // rethrow to be caught in UI if needed
-                } finally {
-                    this.alphabetLoadPromise = null;
-                }
-            })();
-        }
-        return this.alphabetLoadPromise;
     }
 
     isFSLModelLoaded(): boolean { return this.fslModel !== null; }
-    isAlphabetModelLoaded(): boolean { return this.alphabetModel !== null; }
 
-    private normalizeToWrist(frame: Float32Array): Float32Array {
-        const result = new Float32Array(frame);
- 
-        // Use the Pose-Face-LH-RH offsets: LH at 1536, RH at 1599
-        // 1. Center left hand relative to left wrist
-        const lx = result[LH_START];
-        const ly = result[LH_START + 1];
-        const lz = result[LH_START + 2];
-        if (lx !== 0 || ly !== 0) {
-            for (let i = LH_START; i < LH_START + 63; i += 3) {
-                result[i] -= lx;
-                result[i + 1] -= ly;
-                result[i + 2] -= lz;
-            }
-        }
- 
-        // 2. Center right hand relative to right wrist
-        const rx = result[RH_START];
-        const ry = result[RH_START + 1];
-        const rz = result[RH_START + 2];
-        if (rx !== 0 || ry !== 0) {
-            for (let i = RH_START; i < RH_START + 63; i += 3) {
-                result[i] -= rx;
-                result[i + 1] -= ry;
-                result[i + 2] -= rz;
-            }
-        }
- 
-        return result;
+    getSequenceLength(): number {
+        return this.wordSequenceLength;
     }
 
-    async classifyFSL(frames: Float32Array[]): Promise<{ labelIndex: number; confidence: number }> {
-        if (!this.fslModel) throw new Error('FSL model not loaded');
-        
-        // Match the training sequence length (30 frames)
-        const SEQ_LENGTH = 30;
-        const FRAME_SIZE = 1662;
-        
-        if (frames.length !== SEQ_LENGTH) {
-            console.warn(`[TFLite] Expected ${SEQ_LENGTH} frames, got ${frames.length}. Model might misbehave.`);
-        }
-
-        const flatInput = new Float32Array(SEQ_LENGTH * FRAME_SIZE);
-        for (let i = 0; i < Math.min(frames.length, SEQ_LENGTH); i++) {
-            // NOTE: Normalization disabled to match training script logic
-            // const normalized = this.normalizeToWrist(frames[i]);
-            const normalized = frames[i];
-            flatInput.set(normalized.slice(0, FRAME_SIZE), i * FRAME_SIZE);
-        }
-
-        const outputTensor = await this.fslModel.run([flatInput.buffer as ArrayBuffer]);
-        const dataType = this.fslModel.outputs[0].dataType;
-        const outputData = dataType === 'uint8' 
-            ? new Uint8Array(outputTensor[0]) 
-            : new Float32Array(outputTensor[0]);
-        
-        let predictedIdx = 0;
-        let maxConfidence = 0;
-        for (let i = 0; i < outputData.length; i++) {
-            if (outputData[i] > maxConfidence) {
-                maxConfidence = outputData[i];
-                predictedIdx = i;
-            }
-        }
-
-        // Auto-scale if model returns 0-255 instead of 0-1
-        if (dataType === 'uint8' || maxConfidence > 1.0) maxConfidence = maxConfidence / 255.0;
-
-        debugLog(`[TFLite Debug] FSL Prediction: Index ${predictedIdx}, Confidence: ${maxConfidence.toFixed(4)}`);
-        return { labelIndex: predictedIdx, confidence: maxConfidence };
+    getInputShape(): number[] {
+        return [...this.wordInputShape];
     }
 
-    async classifyAlphabet(frame: Float32Array): Promise<{ letterIndex: number; confidence: number }> {
-        if (!this.alphabetModel) throw new Error('Alphabet model not loaded');
+    async classifyFSL(frames: Float32Array[]): Promise<FSLWordPrediction> {
+        await this.loadFSLModel();
 
-        // Check expected input size
-        const shape = this.alphabetModel.inputs[0].shape;
-        const expectedSize = shape.reduce((a, b) => a * b, 1);
-        const FRAME_SIZE = 1662;
-        let input: Float32Array;
+        if (!this.fslModel) {
+            throw new Error('Word FSL model is not loaded.');
+        }
 
-        if (expectedSize === 63 || expectedSize === 126) {
-            // Model only expects HAND landmarks (common for Alphabet/Fingerspelling)
-            // Try to find the active hand
-            const lh = frame.slice(LH_START, LH_START + 63);
-            const rh = frame.slice(RH_START, RH_START + 63);
-            
-            const isLhActive = lh[0] !== 0 || lh[1] !== 0;
-            const isRhActive = rh[0] !== 0 || rh[1] !== 0;
+        if (frames.length !== this.wordSequenceLength) {
+            throw new Error(`Word inference requires exactly ${this.wordSequenceLength} frames, got ${frames.length}.`);
+        }
 
-            if (expectedSize === 63) {
-                // Single hand model — pick the one that's active
-                const activeHand = isRhActive ? rh : (isLhActive ? lh : new Float32Array(63));
-                input = this.normalizeHand(activeHand);
-            } else {
-                // Two hand model (126 features)
-                input = new Float32Array(126);
-                input.set(this.normalizeHand(lh), 0);
-                input.set(this.normalizeHand(rh), 63);
+        for (let i = 0; i < frames.length; i++) {
+            if (frames[i].length !== WORD_FRAME_SIZE) {
+                throw new Error(`Word frame ${i} must contain exactly ${WORD_FRAME_SIZE} values, got ${frames[i].length}.`);
             }
+        }
+
+        const inputSize = this.wordSequenceLength * WORD_FRAME_SIZE;
+        const input = new Float32Array(inputSize);
+        for (let frameIndex = 0; frameIndex < frames.length; frameIndex++) {
+            input.set(frames[frameIndex], frameIndex * WORD_FRAME_SIZE);
+        }
+        this.inferenceLogCounter += 1;
+        const shouldLogInference = this.inferenceLogCounter <= 5 ||
+            this.inferenceLogCounter % WORD_CLASSIFIER_LOG_INTERVAL === 0;
+        if (shouldLogInference) {
+            console.log(`[SignClassifier] Word input tensor length before inference: ${input.length}`);
+        }
+
+        const outputTensor = await this.fslModel.run([input.buffer as ArrayBuffer]);
+        const probabilities = this.readOutputProbabilities(outputTensor[0], this.fslModel.outputs?.[0]?.dataType);
+        const topPredictions = this.getTopPredictions(probabilities, 3);
+        const bestPrediction = topPredictions[0] ?? { label: 'CLASS_0', confidence: 0, index: 0 };
+        if (shouldLogInference) {
+            console.log(
+                '[SignClassifier] Word top 3 predictions: ' +
+                topPredictions
+                    .map(item => `${item.label}:${item.confidence.toFixed(4)}`)
+                    .join(' | ')
+            );
+            console.log(`[SignClassifier] Word prediction: ${bestPrediction.label} (${bestPrediction.confidence.toFixed(4)})`);
+        }
+
+        return {
+            label: bestPrediction.label,
+            labelIndex: bestPrediction.index,
+            confidence: bestPrediction.confidence,
+            probabilities: Array.from(probabilities),
+        };
+    }
+
+    private parseLabelMapping(parsed: unknown): string[] {
+        const data = (parsed as any)?.default ?? parsed;
+        const labels: string[] = [];
+
+        if (Array.isArray(data)) {
+            data.forEach((value, index) => {
+                labels[index] = this.parseLabelValue(value, index);
+            });
+        } else if (data && typeof data === 'object') {
+            Object.entries(data as Record<string, unknown>).forEach(([key, value]) => {
+                const index = Number(key);
+                if (!Number.isInteger(index) || index < 0) {
+                    throw new Error(`${WORD_LABEL_MAPPING_ASSET_PATH} contains a non-numeric key: ${key}`);
+                }
+                labels[index] = this.parseLabelValue(value, index);
+            });
         } else {
-            // Holistic model (expects 1662 features)
-            input = frame.slice(0, FRAME_SIZE);
+            throw new Error(`${WORD_LABEL_MAPPING_ASSET_PATH} must be a JSON object mapping output index to label.`);
         }
 
-        const outputTensor = await this.alphabetModel.run([input.buffer as ArrayBuffer]);
-        const dataType = this.alphabetModel.outputs[0].dataType;
-        const outputData = dataType === 'uint8' 
-            ? new Uint8Array(outputTensor[0]) 
-            : new Float32Array(outputTensor[0]);
-
-        let predictedIdx = 0;
-        let maxConfidence = 0;
-        for (let i = 0; i < outputData.length; i++) {
-            if (outputData[i] > maxConfidence) {
-                maxConfidence = outputData[i];
-                predictedIdx = i;
-            }
+        if (labels.length === 0 || labels.every(label => !label)) {
+            throw new Error(`${WORD_LABEL_MAPPING_ASSET_PATH} is empty. Add output-index-to-label entries.`);
         }
 
-        if (dataType === 'uint8' || maxConfidence > 1.0) maxConfidence = maxConfidence / 255.0;
-        debugLog(`[TFLite Debug] Alphabet: Expected ${expectedSize}, Result: Index ${predictedIdx}, Conf: ${maxConfidence.toFixed(4)}`);
-        return { letterIndex: predictedIdx, confidence: maxConfidence };
+        return labels;
     }
 
-    private normalizeHand(hand: Float32Array): Float32Array {
-        const result = new Float32Array(hand);
-        const wx = result[0];
-        const wy = result[1];
-        const wz = result[2];
-        if (wx !== 0 || wy !== 0) {
-            for (let i = 0; i < 63; i += 3) {
-                result[i] -= wx;
-                result[i + 1] -= wy;
-                result[i + 2] -= wz;
+    private parseLabelValue(value: unknown, index: number): string {
+        const label = String(value ?? '').trim();
+        if (!label) {
+            throw new Error(`${WORD_LABEL_MAPPING_ASSET_PATH} contains an empty label at index ${index}.`);
+        }
+        return label;
+    }
+
+    private async inspectLocalTfliteModel(uri: string): Promise<TfliteModelInspection> {
+        const base64 = await FileSystem.readAsStringAsync(uri, { encoding: 'base64' });
+        const bytes = new Uint8Array(Buffer.from(base64, 'base64'));
+        const inspection = this.inspectTfliteModel(bytes);
+
+        console.log(
+            `[SignClassifier] Word model preflight input shape: [${inspection.inputShape.join(', ')}], ` +
+            `custom ops: ${inspection.customOps.join(', ') || 'none'}`
+        );
+
+        return inspection;
+    }
+
+    private inspectTfliteModel(bytes: Uint8Array): TfliteModelInspection {
+        const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+        const readInt8 = (offset: number) => view.getInt8(offset);
+        const readUint16 = (offset: number) => view.getUint16(offset, true);
+        const readInt32 = (offset: number) => view.getInt32(offset, true);
+        const readUint32 = (offset: number) => view.getUint32(offset, true);
+        const rootTable = readUint32(0);
+
+        const getFieldOffset = (tableOffset: number, fieldIndex: number): number => {
+            const vtableOffset = tableOffset - readInt32(tableOffset);
+            const vtableLength = readUint16(vtableOffset);
+            const slotOffset = 4 + fieldIndex * 2;
+            if (slotOffset >= vtableLength) return 0;
+
+            const fieldOffset = readUint16(vtableOffset + slotOffset);
+            return fieldOffset ? tableOffset + fieldOffset : 0;
+        };
+
+        const readVector = (fieldOffset: number): { start: number; length: number } => {
+            const vectorOffset = fieldOffset + readUint32(fieldOffset);
+            return {
+                start: vectorOffset + 4,
+                length: readUint32(vectorOffset),
+            };
+        };
+
+        const readVectorObject = (fieldOffset: number, index: number): number => {
+            const vector = readVector(fieldOffset);
+            const objectRef = vector.start + index * 4;
+            return objectRef + readUint32(objectRef);
+        };
+
+        const readInt32Vector = (fieldOffset: number): number[] => {
+            const vector = readVector(fieldOffset);
+            const values: number[] = [];
+            for (let i = 0; i < vector.length; i++) {
+                values.push(readInt32(vector.start + i * 4));
+            }
+            return values;
+        };
+
+        const readString = (fieldOffset: number): string => {
+            const stringOffset = fieldOffset + readUint32(fieldOffset);
+            const length = readUint32(stringOffset);
+            let value = '';
+            for (let i = 0; i < length; i++) {
+                value += String.fromCharCode(view.getUint8(stringOffset + 4 + i));
+            }
+            return value;
+        };
+
+        const operatorCodesField = getFieldOffset(rootTable, 1);
+        const customOps = new Set<string>();
+        if (operatorCodesField) {
+            const operatorCodes = readVector(operatorCodesField);
+            for (let i = 0; i < operatorCodes.length; i++) {
+                const operatorCodeTable = readVectorObject(operatorCodesField, i);
+                const customCodeField = getFieldOffset(operatorCodeTable, 1);
+                if (customCodeField) {
+                    customOps.add(readString(customCodeField));
+                } else {
+                    const deprecatedBuiltinField = getFieldOffset(operatorCodeTable, 0);
+                    const builtinCodeField = getFieldOffset(operatorCodeTable, 3);
+                    const builtinCode = builtinCodeField
+                        ? readInt32(builtinCodeField)
+                        : deprecatedBuiltinField
+                            ? readInt8(deprecatedBuiltinField)
+                            : 0;
+                    if (builtinCode === 32) customOps.add('CUSTOM');
+                }
             }
         }
-        return result;
+
+        const subgraphsField = getFieldOffset(rootTable, 2);
+        if (!subgraphsField) {
+            return { inputShape: [], customOps: Array.from(customOps) };
+        }
+
+        const subgraphTable = readVectorObject(subgraphsField, 0);
+        const tensorsField = getFieldOffset(subgraphTable, 0);
+        const inputsField = getFieldOffset(subgraphTable, 1);
+        if (!tensorsField || !inputsField) {
+            return { inputShape: [], customOps: Array.from(customOps) };
+        }
+
+        const inputTensorIndexes = readInt32Vector(inputsField);
+        if (inputTensorIndexes.length === 0) {
+            return { inputShape: [], customOps: Array.from(customOps) };
+        }
+
+        const tensors = readVector(tensorsField);
+        const inputTensorRef = tensors.start + inputTensorIndexes[0] * 4;
+        const inputTensorTable = inputTensorRef + readUint32(inputTensorRef);
+        const shapeField = getFieldOffset(inputTensorTable, 0);
+
+        return {
+            inputShape: shapeField ? readInt32Vector(shapeField) : [],
+            customOps: Array.from(customOps),
+        };
+    }
+
+    private validateSupportedCustomOps(customOps: string[]): void {
+        if (customOps.length === 0) return;
+
+        const selectTfOps = customOps.filter(op => op.startsWith(SELECT_TF_OP_PREFIX));
+        const operatorDescription = selectTfOps.length > 0
+            ? `Select TF Ops/Flex operators: ${selectTfOps.join(', ')}`
+            : `custom operators: ${customOps.join(', ')}`;
+        throw new Error(
+            `${WORD_MODEL_ASSET_PATH} uses unsupported ${operatorDescription}. ` +
+            'react-native-fast-tflite in this app is built with LiteRT built-in ops only, so this model cannot allocate tensors on device. ' +
+            'Re-export the model with TFLITE_BUILTINS only, for example by avoiding dynamic LSTM/TensorList conversion or using a mobile-friendly sequence layer.'
+        );
+    }
+
+    private applyWordInputShape(inputShape: number[], source: string): void {
+        this.wordInputShape = inputShape;
+        console.log(`[SignClassifier] Word model input shape (${source}): [${inputShape.join(', ')}]`);
+
+        if (inputShape.length >= 3) {
+            const [batchSize, sequenceLength, frameSize] = inputShape.slice(-3);
+
+            if (batchSize !== 1) {
+                console.warn(`[SignClassifier] Word model batch size is ${batchSize}; expected 1.`);
+            }
+
+            if (!SUPPORTED_WORD_SEQUENCE_LENGTHS.has(sequenceLength)) {
+                throw new Error(
+                    `Word model input shape [${inputShape.join(', ')}] has unsupported sequence length ${sequenceLength}. ` +
+                    'Expected 30.'
+                );
+            }
+
+            if (frameSize !== WORD_FRAME_SIZE) {
+                throw new Error(
+                    `Word model input shape [${inputShape.join(', ')}] expects ${frameSize} values per frame, ` +
+                    `but word mode provides ${WORD_FRAME_SIZE} pose+hands values.`
+                );
+            }
+
+            this.wordSequenceLength = sequenceLength;
+        } else {
+            console.warn(
+                `[SignClassifier] Word model input shape was unavailable from ${source}; ` +
+                `defaulting to ${DEFAULT_WORD_SEQUENCE_LENGTH} frames.`
+            );
+            this.wordSequenceLength = DEFAULT_WORD_SEQUENCE_LENGTH;
+        }
+    }
+
+    private validateWordModelContract(): void {
+        if (!this.fslModel) return;
+
+        const inputShape = this.getTensorShape(this.fslModel.inputs?.[0]);
+        const outputShape = this.getTensorShape(this.fslModel.outputs?.[0]);
+        const inputType = String((this.fslModel.inputs?.[0] as any)?.dataType ?? 'float32').toLowerCase();
+        this.applyWordInputShape(inputShape, 'runtime');
+
+        if (inputType && inputType !== 'float32') {
+            console.warn(`[SignClassifier] Word model input dtype is ${inputType}; expected float32.`);
+        }
+
+        const outputCount = this.getElementCount(outputShape);
+        if (outputCount > 0 && outputCount !== this.wordLabels.length) {
+            console.warn(
+                `[SignClassifier] Word model outputs ${outputCount} classes, but ${WORD_LABEL_MAPPING_ASSET_PATH} has ${this.wordLabels.length} labels.`
+            );
+        }
+    }
+
+    private readOutputProbabilities(output: ArrayBuffer, dataType?: string): Float32Array {
+        const outputType = String(dataType ?? 'float32').toLowerCase();
+
+        if (outputType === 'uint8') {
+            const data = new Uint8Array(output);
+            const probabilities = new Float32Array(data.length);
+            for (let i = 0; i < data.length; i++) probabilities[i] = data[i] / 255;
+            return probabilities;
+        }
+
+        if (outputType === 'int8') {
+            const data = new Int8Array(output);
+            const probabilities = new Float32Array(data.length);
+            for (let i = 0; i < data.length; i++) probabilities[i] = (data[i] + 128) / 255;
+            return probabilities;
+        }
+
+        return new Float32Array(output);
+    }
+
+    private getTopPredictions(probabilities: Float32Array, limit: number): Array<{ label: string; confidence: number; index: number }> {
+        const top: Array<{ label: string; confidence: number; index: number }> = [];
+
+        for (let i = 0; i < probabilities.length; i++) {
+            const candidate = {
+                label: this.wordLabels[i] ?? `CLASS_${i}`,
+                confidence: probabilities[i],
+                index: i,
+            };
+            const insertAt = top.findIndex(item => candidate.confidence > item.confidence);
+
+            if (insertAt === -1) {
+                if (top.length < limit) top.push(candidate);
+            } else {
+                top.splice(insertAt, 0, candidate);
+                if (top.length > limit) top.pop();
+            }
+        }
+
+        return top;
+    }
+
+    private getTensorShape(tensor: { shape?: number[] } | undefined): number[] {
+        if (!Array.isArray(tensor?.shape)) return [];
+        return tensor.shape
+            .map(dim => Number(dim))
+            .filter(dim => Number.isFinite(dim));
+    }
+
+    private getElementCount(shape: number[]): number {
+        if (shape.length === 0 || shape.some(dim => dim <= 0)) return 0;
+        return shape.reduce((count, dim) => count * dim, 1);
     }
 }
 
