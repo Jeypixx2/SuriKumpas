@@ -17,19 +17,19 @@ type StableWordPrediction = {
 };
 type WordPredictionHistoryItem = StableWordPrediction | null;
 
-// Aligned with Pose-Face-LH-RH order:
-// Pose: 0..131, Face: 132..1535, LH: 1536..1598, RH: 1599..1661
+// Compact camera bridge payload aligned with the word model: Pose-LH-RH.
+// Pose: 0..131, LH: 132..194, RH: 195..257
 const POSE_START = 0;
 const POSE_SIZE = 132;
-const LH_START = 1536;
-const RH_START = 1599;
+const LH_START = 132;
+const RH_START = 195;
 const HAND_SIZE = 63;
-const HOLISTIC_FRAME_SIZE = 1662;
 const WORD_FRAME_SIZE = POSE_SIZE + HAND_SIZE + HAND_SIZE;
 const INITIAL_WORD_SEQUENCE_LENGTH = 30;
 const WORD_CONFIDENCE_THRESHOLD = 0.75;
-const WORD_SMOOTHING_WINDOW = 5;
-const WORD_PREDICTION_STRIDE = 2;
+const WORD_QUICK_ACCEPT_THRESHOLD = 0.90;
+const WORD_SMOOTHING_WINDOW = 3;
+const WORD_PREDICTION_STRIDE = 1;
 const WORD_RESULT_VISIBLE_MS = 2000;
 const WORD_DEBUG_LOG_INTERVAL = 15;
 const WORD_INFERENCE_LOG_INTERVAL = 10;
@@ -38,14 +38,14 @@ const ALPHABET_CONFIDENCE_THRESHOLD = 0.55;
 const ALPHABET_QUICK_ACCEPT_THRESHOLD = 0.82;
 const ALPHABET_MARGIN_THRESHOLD = 0.12;
 const ALPHABET_CONFIRMATION_COUNT = 2;
-const ALPHABET_HISTORY_LIMIT = 4;
+const ALPHABET_HISTORY_LIMIT = 3;
 const CONFUSABLE_ALPHABET_LABELS = new Set(['N', 'T']);
 const CONFUSABLE_ALPHABET_CONFIDENCE_THRESHOLD = 0.72;
 const CONFUSABLE_ALPHABET_QUICK_ACCEPT_THRESHOLD = 0.94;
 const CONFUSABLE_ALPHABET_MARGIN_THRESHOLD = 0.22;
 const CONFUSABLE_ALPHABET_CONFIRMATION_COUNT = 3;
-const ALPHABET_INFERENCE_INTERVAL_MS = 350;
-const ALPHABET_FRAME_TIMEOUT_MS = 1200;
+const ALPHABET_INFERENCE_INTERVAL_MS = 220;
+const ALPHABET_FRAME_TIMEOUT_MS = 800;
 const DETECTION_COOLDOWN_MS = 500;
 
 const NO_HANDS_GRACE_FRAMES = 3;
@@ -83,8 +83,8 @@ function modelErrorMessage(mode: RecognitionMode, error: unknown): string {
         : `Word model could not be loaded. Details: ${details}`;
 }
 
-function hasAnyNonZero(values: Float32Array): boolean {
-    for (let i = 0; i < values.length; i++) {
+function hasAnyNonZero(values: Float32Array, start: number, end: number): boolean {
+    for (let i = start; i < end; i++) {
         if (values[i] !== 0) return true;
     }
     return false;
@@ -92,16 +92,18 @@ function hasAnyNonZero(values: Float32Array): boolean {
 
 function getWordHandVisibility(keypoints: Float32Array): { leftVisible: boolean; rightVisible: boolean } {
     return {
-        leftVisible: hasAnyNonZero(keypoints.slice(LH_START, LH_START + HAND_SIZE)),
-        rightVisible: hasAnyNonZero(keypoints.slice(RH_START, RH_START + HAND_SIZE)),
+        leftVisible: hasAnyNonZero(keypoints, LH_START, LH_START + HAND_SIZE),
+        rightVisible: hasAnyNonZero(keypoints, RH_START, RH_START + HAND_SIZE),
     };
 }
 
 function convertHolisticFrameToWordFrame(keypoints: Float32Array): Float32Array | null {
-    if (keypoints.length !== HOLISTIC_FRAME_SIZE) {
-        console.warn(`[Detect] Expected ${HOLISTIC_FRAME_SIZE} MediaPipe keypoints, got ${keypoints.length}.`);
+    if (keypoints.length !== WORD_FRAME_SIZE) {
+        console.warn(`[Detect] Expected ${WORD_FRAME_SIZE} pose+hand keypoints, got ${keypoints.length}.`);
         return null;
     }
+
+    if (!SWAP_HANDS_FOR_MIRROR) return keypoints;
 
     const pose = keypoints.slice(POSE_START, POSE_START + POSE_SIZE);
     const leftHand = keypoints.slice(LH_START, LH_START + HAND_SIZE);
@@ -109,13 +111,8 @@ function convertHolisticFrameToWordFrame(keypoints: Float32Array): Float32Array 
     const wordFrame = new Float32Array(WORD_FRAME_SIZE);
 
     wordFrame.set(pose, 0);
-    if (SWAP_HANDS_FOR_MIRROR) {
-        wordFrame.set(rightHand, POSE_SIZE);
-        wordFrame.set(leftHand, POSE_SIZE + HAND_SIZE);
-    } else {
-        wordFrame.set(leftHand, POSE_SIZE);
-        wordFrame.set(rightHand, POSE_SIZE + HAND_SIZE);
-    }
+    wordFrame.set(rightHand, POSE_SIZE);
+    wordFrame.set(leftHand, POSE_SIZE + HAND_SIZE);
 
     return wordFrame;
 }
@@ -190,6 +187,7 @@ export default function DetectScreen() {
     const activeAlphabetRequestRef = useRef<number>(0);
     const alphabetRequestCounterRef = useRef<number>(0);
     const alphabetFrameTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+    const resultHideTimeoutRef = useRef<NodeJS.Timeout | null>(null);
     const isAlphabetProcessingRef = useRef<boolean>(false);
     const isWordProcessingRef = useRef<boolean>(false);
     const processingAlphabetRequestRef = useRef<number>(0);
@@ -230,6 +228,17 @@ export default function DetectScreen() {
         lastStableWordPredictionRef.current = null;
         lastEmittedWordLabelRef.current = null;
         isWordProcessingRef.current = false;
+    }, []);
+
+    const keepResultVisible = useCallback((durationMs: number) => {
+        if (resultHideTimeoutRef.current) {
+            clearTimeout(resultHideTimeoutRef.current);
+        }
+        setShowResult(true);
+        resultHideTimeoutRef.current = setTimeout(() => {
+            setShowResult(false);
+            resultHideTimeoutRef.current = null;
+        }, durationMs);
     }, []);
 
     const resetWordPredictionState = useCallback(() => {
@@ -352,6 +361,9 @@ export default function DetectScreen() {
             if (alphabetFrameTimeoutRef.current) {
                 clearTimeout(alphabetFrameTimeoutRef.current);
             }
+            if (resultHideTimeoutRef.current) {
+                clearTimeout(resultHideTimeoutRef.current);
+            }
         };
     }, []);
 
@@ -441,12 +453,11 @@ export default function DetectScreen() {
 
                 setDetectedLabel(label);
                 setConfidence(result.confidence);
-                setShowResult(true);
+                keepResultVisible(2000);
                 setStatus(`${result.label} (${(result.confidence * 100).toFixed(0)}%)`);
                 cameraRef.current?.speak(result.label, 'fil-PH');
                 lastDetectionRef.current = Date.now();
                 alphabetPredictionHistoryRef.current = [];
-                setTimeout(() => setShowResult(false), 2000);
             }
         } catch (error) {
             const message = modelErrorMessage('alphabet', error);
@@ -460,7 +471,7 @@ export default function DetectScreen() {
             }
             isAlphabetProcessingRef.current = false;
         }
-    }, [activeMode, canDetect]);
+    }, [activeMode, canDetect, keepResultVisible]);
 
     const classifyWordSlidingWindow = useCallback(async (frames: Float32Array[]) => {
         if (!canDetect || activeMode !== 'word') return;
@@ -497,7 +508,10 @@ export default function DetectScreen() {
                 wordPredictionHistoryRef.current.shift();
             }
 
-            const stablePrediction = getMajorityWordPrediction(wordPredictionHistoryRef.current);
+            const stablePrediction = acceptedPrediction &&
+                acceptedPrediction.confidence >= WORD_QUICK_ACCEPT_THRESHOLD
+                ? acceptedPrediction
+                : getMajorityWordPrediction(wordPredictionHistoryRef.current);
             if (stablePrediction) {
                 lastStableWordPredictionRef.current = stablePrediction;
             }
@@ -507,17 +521,17 @@ export default function DetectScreen() {
                 .map(item => item?.label ?? 'null')
                 .join(',');
 
-            const shouldEmitPrediction = !!stablePrediction && !lastEmittedWordLabelRef.current;
+            const shouldEmitPrediction = !!stablePrediction &&
+                stablePrediction.label !== lastEmittedWordLabelRef.current;
 
             if (shouldEmitPrediction && stablePrediction) {
                 const displayLabel = createWordDisplayLabel(stablePrediction.label, stablePrediction.labelIndex);
                 setDetectedLabel(displayLabel);
                 setConfidence(stablePrediction.confidence);
-                setShowResult(true);
+                keepResultVisible(WORD_RESULT_VISIBLE_MS);
                 setStatus(`${displayLabel.english} (${(stablePrediction.confidence * 100).toFixed(0)}%)`);
                 cameraRef.current?.speak(displayLabel.filipino || displayLabel.english, 'fil-PH');
                 lastEmittedWordLabelRef.current = stablePrediction.label;
-                setTimeout(() => setShowResult(false), WORD_RESULT_VISIBLE_MS);
             }
 
             if (shouldLogInference || shouldEmitPrediction) {
@@ -543,7 +557,7 @@ export default function DetectScreen() {
         } finally {
             isWordProcessingRef.current = false;
         }
-    }, [activeMode, canDetect]);
+    }, [activeMode, canDetect, keepResultVisible]);
 
     const processWordKeypoints = useCallback(async (keypoints: Float32Array, handsDetected: boolean) => {
         if (!canDetect || activeMode !== 'word') return;
@@ -594,7 +608,9 @@ export default function DetectScreen() {
             return;
         }
 
-        const frames = wordFrameBufferRef.current.map(frame => new Float32Array(frame));
+        // Frame objects are immutable after insertion, so a shallow window
+        // snapshot is sufficient and avoids 30 typed-array allocations.
+        const frames = wordFrameBufferRef.current.slice();
         await classifyWordSlidingWindow(frames);
     }, [activeMode, canDetect, classifyWordSlidingWindow]);
 
@@ -616,10 +632,20 @@ export default function DetectScreen() {
         clearAlphabetBuffers();
     }, [activeMode, clearAlphabetBuffers, resetWordPredictionState]);
 
-    const handleKeypointsExtracted = useCallback(async (keypoints: Float32Array | 'no-hands') => {
+    const handleKeypointsExtracted = useCallback(async (
+        keypoints: Float32Array | 'hands-detected' | 'no-hands'
+    ) => {
         if (!canDetect) return;
         if (keypoints === 'no-hands') {
             handleHandsMissing();
+            return;
+        }
+
+        if (keypoints === 'hands-detected') {
+            missingHandFrameCountRef.current = 0;
+            if (activeMode === 'alphabet' && Date.now() - lastDetectionRef.current >= DETECTION_COOLDOWN_MS) {
+                requestAlphabetFrame('Hand detected');
+            }
             return;
         }
 
@@ -701,6 +727,7 @@ export default function DetectScreen() {
                     onReady={handleCameraReady}
                     onError={handleCameraIssue}
                     active={isFocused}
+                    recognitionMode={activeMode}
                 />
                 {!canDetect && (
                     <View style={styles.readinessOverlay}>

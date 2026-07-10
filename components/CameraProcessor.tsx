@@ -11,12 +11,13 @@ const debugLog = (...args: unknown[]) => {
 };
 
 interface CameraProcessorProps {
-    onKeypointsExtracted?: (keypoints: Float32Array | 'no-hands') => void;
+    onKeypointsExtracted?: (keypoints: Float32Array | 'hands-detected' | 'no-hands') => void;
     onImageFrameCaptured?: (frame: CameraImageFrame) => void;
     onReady?: () => void;
     onError?: (message: string) => void;
     style?: any;
     active?: boolean;
+    recognitionMode?: 'alphabet' | 'word';
 }
 
 export interface CameraImageFrame {
@@ -44,6 +45,12 @@ const MEDIAPIPE_SCRIPT = `
         let canvasCtx = null;
         let holistic = null;
         let isProcessing = false;
+        let recognitionMode = 'alphabet';
+        let lastAlphabetSignalAt = 0;
+
+        window.setRecognitionMode = function(mode) {
+            recognitionMode = mode === 'word' ? 'word' : 'alphabet';
+        };
 
         window.onerror = function(msg) {
             if (window.ReactNativeWebView) {
@@ -62,6 +69,7 @@ const MEDIAPIPE_SCRIPT = `
             if ('speechSynthesis' in window) {
                 const utterance = new SpeechSynthesisUtterance(text);
                 utterance.lang = lang || 'fil-PH';
+                utterance.rate = 1.1;
                 window.speechSynthesis.speak(utterance);
             }
         };
@@ -201,29 +209,24 @@ const MEDIAPIPE_SCRIPT = `
         function extractKeypoints(results) {
             const kp = [];
             
-            // === MUST match extractKeypoints.ts and SignClassifier.ts order exactly ===
+            // The word model only consumes pose + hands. Do not send the 1,404
+            // unused face values over the WebView bridge on every frame.
+            // === MUST match SignClassifier.ts order exactly ===
             // 1. Pose: 33 * 4 = 132 values
             const pose = results.poseLandmarks || [];
             for (let i = 0; i < 33; i++) {
                 if (i < pose.length) { const lm = pose[i]; kp.push(r(lm.x), r(lm.y), r(lm.z), r(lm.visibility || 1)); }
                 else { kp.push(0, 0, 0, 0); }
             }
-
-            // 2. Face: 468 * 3 = 1404 values
-            const face = results.faceLandmarks || [];
-            for (let i = 0; i < 468; i++) {
-                if (i < face.length) { const lm = face[i]; kp.push(r(lm.x), r(lm.y), r(lm.z)); }
-                else { kp.push(0, 0, 0); }
-            }
             
-            // 3. Left hand: 21 * 3 = 63 values
+            // 2. Left hand: 21 * 3 = 63 values
             const lh = results.leftHandLandmarks || [];
             for (let i = 0; i < 21; i++) {
                 if (i < lh.length) { const lm = lh[i]; kp.push(r(lm.x), r(lm.y), r(lm.z)); }
                 else { kp.push(0, 0, 0); }
             }
             
-            // 4. Right hand: 21 * 3 = 63 values
+            // 3. Right hand: 21 * 3 = 63 values
             const rh = results.rightHandLandmarks || [];
             for (let i = 0; i < 21; i++) {
                 if (i < rh.length) { const lm = rh[i]; kp.push(r(lm.x), r(lm.y), r(lm.z)); }
@@ -235,6 +238,10 @@ const MEDIAPIPE_SCRIPT = `
         
         function onResults(results) {
             rememberHandBounds(results);
+            const hasHands = !!(
+                (results.leftHandLandmarks && results.leftHandLandmarks.length) ||
+                (results.rightHandLandmarks && results.rightHandLandmarks.length)
+            );
 
             canvasCtx.save();
             canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
@@ -251,8 +258,21 @@ const MEDIAPIPE_SCRIPT = `
             
             canvasCtx.restore();
 
+            // Alphabet classification only needs a small hand-presence signal.
+            // Limit it to 10 Hz so React Native stays free for image inference/UI.
+            if (recognitionMode === 'alphabet') {
+                const now = Date.now();
+                if (now - lastAlphabetSignalAt >= 100) {
+                    lastAlphabetSignalAt = now;
+                    window.ReactNativeWebView.postMessage(JSON.stringify({
+                        type: hasHands ? 'hands-detected' : 'no-hands'
+                    }));
+                }
+                return;
+            }
+
             window.ReactNativeWebView.postMessage(JSON.stringify({
-                type: 'keypoints',
+                type: hasHands ? 'keypoints' : 'no-hands-keypoints',
                 data: extractKeypoints(results)
             }));
         }
@@ -325,7 +345,15 @@ const MEDIAPIPE_SCRIPT = `
 `;
 
 const CameraProcessor = forwardRef<CameraProcessorRef, CameraProcessorProps>(
-    ({ onKeypointsExtracted, onImageFrameCaptured, onReady, onError, style, active = true }, ref) => {
+    ({
+        onKeypointsExtracted,
+        onImageFrameCaptured,
+        onReady,
+        onError,
+        style,
+        active = true,
+        recognitionMode = 'alphabet',
+    }, ref) => {
         const [permission, requestPermission] = useCameraPermissions();
         const [isWebViewReady, setIsWebViewReady] = useState(false);
         const webViewRef = useRef<WebView>(null);
@@ -370,6 +398,13 @@ const CameraProcessor = forwardRef<CameraProcessorRef, CameraProcessorProps>(
                 webViewRef.current?.injectJavaScript(js);
             }
         }, [active, isWebViewReady]);
+
+        useEffect(() => {
+            if (!isWebViewReady) return;
+            webViewRef.current?.injectJavaScript(
+                `window.setRecognitionMode(${JSON.stringify(recognitionMode)}); true;`
+            );
+        }, [isWebViewReady, recognitionMode]);
 
         const htmlContent = `
             <!DOCTYPE html>
@@ -423,6 +458,11 @@ const CameraProcessor = forwardRef<CameraProcessorRef, CameraProcessorProps>(
                     if (CAMERA_DEBUG && Math.random() < 0.05) debugLog(`[CameraProcessor] Received keypoints, length: ${message.data.length}`);
                     const keypoints = new Float32Array(message.data);
                     onKeypointsExtracted?.(keypoints);
+                } else if (message.type === 'no-hands-keypoints') {
+                    const keypoints = new Float32Array(message.data);
+                    onKeypointsExtracted?.(keypoints);
+                } else if (message.type === 'hands-detected') {
+                    onKeypointsExtracted?.('hands-detected');
                 } else if (message.type === 'no-hands') {
                     onKeypointsExtracted?.('no-hands');
                 } else if (message.type === 'image-frame') {
