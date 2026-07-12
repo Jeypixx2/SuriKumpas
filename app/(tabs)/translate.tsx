@@ -3,14 +3,13 @@ import { StyleSheet, View, Text } from 'react-native';
 import { useRouter } from 'expo-router';
 import { MaterialIcons } from '@expo/vector-icons';
 import { TouchableOpacity } from 'react-native';
-import Voice, { SpeechResultsEvent, SpeechErrorEvent } from '@dev-amirzubair/react-native-voice';
+import Voice, { SpeechEndEvent, SpeechResultsEvent, SpeechErrorEvent } from '@dev-amirzubair/react-native-voice';
 import { useAvatarContext } from '../../lib/AvatarContext';
 import MicButton from '../../components/MicButton';
 import { tokenizeSentence } from '../../lib/labels';
 
 const normalizeSpeechText = (text: string) => text.trim().replace(/\s+/g, ' ');
-const SIGN_PARTIAL_DEBOUNCE_MS = 120;
-const FINGERSPELL_PARTIAL_DEBOUNCE_MS = 700;
+const FINAL_RESULT_WAIT_MS = 500;
 
 export default function TranslateScreen() {
     const router = useRouter();
@@ -22,23 +21,25 @@ export default function TranslateScreen() {
 
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
     const timeoutRef = useRef<NodeJS.Timeout | null>(null);
-    const partialTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+    const finalResultTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+    const latestSpeechRef = useRef('');
+    const speechSessionFinalizedRef = useRef(false);
     const lastQueuedSpeechRef = useRef('');
 
-    const clearPartialTimeout = useCallback(() => {
-        if (partialTimeoutRef.current) {
-            clearTimeout(partialTimeoutRef.current);
-            partialTimeoutRef.current = null;
+    const clearFinalResultTimeout = useCallback(() => {
+        if (finalResultTimeoutRef.current) {
+            clearTimeout(finalResultTimeoutRef.current);
+            finalResultTimeoutRef.current = null;
         }
     }, []);
 
-    const queueSpeechForSigning = useCallback((rawText: string, isFinal: boolean) => {
+    const queueSpeechForSigning = useCallback((rawText: string) => {
         const text = normalizeSpeechText(rawText);
         if (!text) return;
 
         setRecognizedText(text);
         if (text === lastQueuedSpeechRef.current) {
-            if (isFinal) setErrorMessage(null);
+            setErrorMessage(null);
             return;
         }
 
@@ -50,8 +51,6 @@ export default function TranslateScreen() {
             setErrorMessage(null);
             lastQueuedSpeechRef.current = text;
         } else {
-            if (!isFinal) return;
-
             setErrorMessage('Sign not available');
             setSequenceToPlay(null);
             setSignToPlay(null);
@@ -67,42 +66,62 @@ export default function TranslateScreen() {
         }
     }, [setSequenceToPlay, setSignToPlay, setLetterToPlay]);
 
+    const finalizeSpeechSession = useCallback((rawText?: string) => {
+        if (speechSessionFinalizedRef.current) return;
+
+        const text = normalizeSpeechText(rawText || latestSpeechRef.current);
+        if (!text) return;
+
+        speechSessionFinalizedRef.current = true;
+        clearFinalResultTimeout();
+        queueSpeechForSigning(text);
+    }, [clearFinalResultTimeout, queueSpeechForSigning]);
+
+    const scheduleSpeechFinalization = useCallback(() => {
+        if (speechSessionFinalizedRef.current || !latestSpeechRef.current) return;
+
+        clearFinalResultTimeout();
+        finalResultTimeoutRef.current = setTimeout(() => {
+            finalResultTimeoutRef.current = null;
+            finalizeSpeechSession();
+        }, FINAL_RESULT_WAIT_MS);
+    }, [clearFinalResultTimeout, finalizeSpeechSession]);
+
     const onSpeechPartialResults = useCallback((e: SpeechResultsEvent) => {
         const text = normalizeSpeechText(e.value?.[0] || '');
         if (!text) return;
 
+        latestSpeechRef.current = text;
         setRecognizedText(text);
-        clearPartialTimeout();
-
-        const partialSequence = tokenizeSentence(text);
-        if (partialSequence.length === 0) return;
-
-        const hasFingerspellingFallback = partialSequence.some(item => item.type === 'letter');
-        const debounceMs = hasFingerspellingFallback
-            ? FINGERSPELL_PARTIAL_DEBOUNCE_MS
-            : SIGN_PARTIAL_DEBOUNCE_MS;
-        partialTimeoutRef.current = setTimeout(() => {
-            queueSpeechForSigning(text, false);
-        }, debounceMs);
-    }, [clearPartialTimeout, queueSpeechForSigning]);
+    }, []);
 
     const onSpeechResults = useCallback((e: SpeechResultsEvent) => {
-        const text = e.value?.[0] || '';
-        clearPartialTimeout();
+        const text = normalizeSpeechText(e.value?.[0] || latestSpeechRef.current);
+        if (text) latestSpeechRef.current = text;
         setIsListening(false);
-        queueSpeechForSigning(text, true);
-    }, [clearPartialTimeout, queueSpeechForSigning]);
+        finalizeSpeechSession(text);
+    }, [finalizeSpeechSession]);
+
+    const onSpeechEnd = useCallback((_e: SpeechEndEvent) => {
+        setIsListening(false);
+        // Android can deliver onSpeechEnd just before onSpeechResults. Give the
+        // final result a moment to arrive, then fall back to the latest partial.
+        scheduleSpeechFinalization();
+    }, [scheduleSpeechFinalization]);
 
     const onSpeechError = useCallback((e: SpeechErrorEvent) => {
         console.warn('Speech error:', e.error);
-        clearPartialTimeout();
-        
+        setIsListening(false);
+
+        if (latestSpeechRef.current) {
+            scheduleSpeechFinalization();
+            return;
+        }
+
         if (e.error && (e.error as any).code === '7') {
-           setIsListening(false);
            return;
         }
 
-        setIsListening(false);
         setErrorMessage('Speech recognition timeout. Speak closer to the Mic.');
 
         if (timeoutRef.current) {
@@ -111,21 +130,22 @@ export default function TranslateScreen() {
         timeoutRef.current = setTimeout(() => {
             setErrorMessage(null);
         }, 3000);
-    }, [clearPartialTimeout]);
+    }, [scheduleSpeechFinalization]);
 
     useEffect(() => {
         Voice.onSpeechResults = onSpeechResults;
         Voice.onSpeechPartialResults = onSpeechPartialResults;
+        Voice.onSpeechEnd = onSpeechEnd;
         Voice.onSpeechError = onSpeechError;
-    }, [onSpeechResults, onSpeechPartialResults, onSpeechError]);
+    }, [onSpeechResults, onSpeechPartialResults, onSpeechEnd, onSpeechError]);
 
     useEffect(() => {
         return () => {
             Voice.destroy().then(() => Voice.removeAllListeners());
             if (timeoutRef.current) clearTimeout(timeoutRef.current);
-            clearPartialTimeout();
+            clearFinalResultTimeout();
         };
-    }, [clearPartialTimeout]);
+    }, [clearFinalResultTimeout]);
 
     const toggleListening = useCallback(async () => {
         if (!Voice) {
@@ -137,14 +157,16 @@ export default function TranslateScreen() {
         if (isListening) {
             try {
                 await Voice.stop();
-                clearPartialTimeout();
                 setIsListening(false);
+                scheduleSpeechFinalization();
             } catch (error) {
                 console.error('Error stopping voice:', error);
             }
         } else {
             try {
-                clearPartialTimeout();
+                clearFinalResultTimeout();
+                latestSpeechRef.current = '';
+                speechSessionFinalizedRef.current = false;
                 lastQueuedSpeechRef.current = '';
                 setRecognizedText('');
                 setErrorMessage(null);
@@ -158,7 +180,7 @@ export default function TranslateScreen() {
                 setErrorMessage('Could not start speech recognition. Check microphone permissions.');
             }
         }
-    }, [isListening, clearPartialTimeout]);
+    }, [isListening, clearFinalResultTimeout, scheduleSpeechFinalization, setSequenceToPlay, setSignToPlay, setLetterToPlay]);
 
     return (
         <View style={styles.container}>

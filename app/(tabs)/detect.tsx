@@ -3,7 +3,11 @@ import { StyleSheet, View, Text, TouchableOpacity, Animated, ActivityIndicator }
 import { useRouter } from 'expo-router';
 import { useIsFocused } from '@react-navigation/native';
 import { MaterialIcons } from '@expo/vector-icons';
-import CameraProcessor, { CameraImageFrame, CameraProcessorRef } from '../../components/CameraProcessor';
+import CameraProcessor, {
+    CameraImageFrame,
+    CameraPerformanceMetrics,
+    CameraProcessorRef,
+} from '../../components/CameraProcessor';
 import ResultOverlay from '../../components/ResultOverlay';
 import { globalAlphabetImageClassifier } from '../../lib/AlphabetImageClassifier';
 import { globalClassifier } from '../../lib/SignClassifier';
@@ -16,6 +20,12 @@ type StableWordPrediction = {
     confidence: number;
 };
 type WordPredictionHistoryItem = StableWordPrediction | null;
+type WordInferencePolicy = {
+    source: 'full' | 'completed';
+    confidenceThreshold: number;
+    quickAcceptThreshold: number;
+    marginThreshold: number;
+};
 
 // Compact camera bridge payload aligned with the word model: Pose-LH-RH.
 // Pose: 0..131, LH: 132..194, RH: 195..257
@@ -28,8 +38,20 @@ const WORD_FRAME_SIZE = POSE_SIZE + HAND_SIZE + HAND_SIZE;
 const INITIAL_WORD_SEQUENCE_LENGTH = 30;
 const WORD_CONFIDENCE_THRESHOLD = 0.75;
 const WORD_QUICK_ACCEPT_THRESHOLD = 0.90;
+const WORD_COMPLETED_GESTURE_CONFIDENCE_THRESHOLD = 0.85;
+const WORD_COMPLETED_GESTURE_QUICK_ACCEPT_THRESHOLD = 0.94;
+const WORD_COMPLETED_GESTURE_MARGIN_THRESHOLD = 0.12;
 const WORD_SMOOTHING_WINDOW = 3;
 const WORD_PREDICTION_STRIDE = 1;
+const WORD_GESTURE_MIN_FRAMES = 14;
+const WORD_GESTURE_END_STILL_FRAMES = 2;
+const WORD_COMPLETED_GESTURE_MAX_PROBES = 6;
+const WORD_COMPLETED_GESTURE_PROBE_STRIDE = 2;
+const WORD_THANK_YOU_MIN_FRAMES = 22;
+const WORD_HAND_MOTION_THRESHOLD = 0.006;
+const WORD_GESTURE_PRE_ROLL_FRAMES = 3;
+const WORD_RESULT_REARM_STILL_FRAMES = 2;
+const WORD_RESULT_REARM_MOTION_FRAMES = 3;
 const WORD_RESULT_VISIBLE_MS = 2000;
 const WORD_DEBUG_LOG_INTERVAL = 15;
 const WORD_INFERENCE_LOG_INTERVAL = 10;
@@ -44,12 +66,26 @@ const CONFUSABLE_ALPHABET_CONFIDENCE_THRESHOLD = 0.72;
 const CONFUSABLE_ALPHABET_QUICK_ACCEPT_THRESHOLD = 0.94;
 const CONFUSABLE_ALPHABET_MARGIN_THRESHOLD = 0.22;
 const CONFUSABLE_ALPHABET_CONFIRMATION_COUNT = 3;
-const ALPHABET_INFERENCE_INTERVAL_MS = 220;
+const ALPHABET_INFERENCE_INTERVAL_MS = 180;
 const ALPHABET_FRAME_TIMEOUT_MS = 800;
 const DETECTION_COOLDOWN_MS = 500;
 
 const NO_HANDS_GRACE_FRAMES = 3;
 const SWAP_HANDS_FOR_MIRROR = false;
+
+const FULL_WORD_INFERENCE_POLICY: WordInferencePolicy = {
+    source: 'full',
+    confidenceThreshold: WORD_CONFIDENCE_THRESHOLD,
+    quickAcceptThreshold: WORD_QUICK_ACCEPT_THRESHOLD,
+    marginThreshold: 0.08,
+};
+
+const COMPLETED_WORD_INFERENCE_POLICY: WordInferencePolicy = {
+    source: 'completed',
+    confidenceThreshold: WORD_COMPLETED_GESTURE_CONFIDENCE_THRESHOLD,
+    quickAcceptThreshold: WORD_COMPLETED_GESTURE_QUICK_ACCEPT_THRESHOLD,
+    marginThreshold: WORD_COMPLETED_GESTURE_MARGIN_THRESHOLD,
+};
 
 function normalizeLabelKey(value: string): string {
     return value.replace(/[_-]+/g, ' ').trim().toUpperCase();
@@ -97,7 +133,7 @@ function getWordHandVisibility(keypoints: Float32Array): { leftVisible: boolean;
     };
 }
 
-function convertHolisticFrameToWordFrame(keypoints: Float32Array): Float32Array | null {
+function convertLandmarkFrameToWordFrame(keypoints: Float32Array): Float32Array | null {
     if (keypoints.length !== WORD_FRAME_SIZE) {
         console.warn(`[Detect] Expected ${WORD_FRAME_SIZE} pose+hand keypoints, got ${keypoints.length}.`);
         return null;
@@ -115,6 +151,44 @@ function convertHolisticFrameToWordFrame(keypoints: Float32Array): Float32Array 
     wordFrame.set(leftHand, POSE_SIZE + HAND_SIZE);
 
     return wordFrame;
+}
+
+function calculateHandMotion(previous: Float32Array, current: Float32Array): number {
+    let totalMotion = 0;
+    let comparedLandmarks = 0;
+
+    for (const handStart of [LH_START, RH_START]) {
+        for (let landmark = 0; landmark < 21; landmark++) {
+            const index = handStart + landmark * 3;
+            const previousX = previous[index];
+            const previousY = previous[index + 1];
+            const currentX = current[index];
+            const currentY = current[index + 1];
+            if (
+                (previousX === 0 && previousY === 0) ||
+                (currentX === 0 && currentY === 0)
+            ) continue;
+
+            totalMotion += Math.hypot(currentX - previousX, currentY - previousY);
+            comparedLandmarks += 1;
+        }
+    }
+
+    return comparedLandmarks > 0 ? totalMotion / comparedLandmarks : 0;
+}
+
+function resampleCompletedGesture(frames: Float32Array[], targetLength: number): Float32Array[] {
+    if (frames.length >= targetLength) return frames.slice(-targetLength);
+    if (frames.length === 0) return [];
+    if (frames.length === 1) return Array.from({ length: targetLength }, () => frames[0]);
+
+    // Spread the observed movement across the model's full time axis. Repeating
+    // only the final pose hides the motion that separates compound gestures
+    // such as GOOD MORNING from the shorter THANK YOU gesture.
+    return Array.from({ length: targetLength }, (_, targetIndex) => {
+        const sourcePosition = targetIndex * (frames.length - 1) / (targetLength - 1);
+        return frames[Math.round(sourcePosition)];
+    });
 }
 
 function getMajorityWordPrediction(history: WordPredictionHistoryItem[]): StableWordPrediction | null {
@@ -166,6 +240,7 @@ export default function DetectScreen() {
     const [showResult, setShowResult] = useState(false);
     const [status, setStatus] = useState('Paghahanda...');
     const [debugInfo, setDebugInfo] = useState('');
+    const [performanceInfo, setPerformanceInfo] = useState('');
     const [isMirrored, setIsMirrored] = useState(true);
     const [isAlphabetModelReady, setIsAlphabetModelReady] = useState(false);
     const [isWordModelReady, setIsWordModelReady] = useState(false);
@@ -174,11 +249,23 @@ export default function DetectScreen() {
     const [isCameraReady, setIsCameraReady] = useState(false);
     const [cameraError, setCameraError] = useState<string | null>(null);
     const alphabetPredictionHistoryRef = useRef<string[]>([]);
+    const lastEmittedAlphabetLabelRef = useRef<string | null>(null);
     const wordSequenceLengthRef = useRef(INITIAL_WORD_SEQUENCE_LENGTH);
     const wordFrameBufferRef = useRef<Float32Array[]>([]);
+    const previousWordFrameRef = useRef<Float32Array | null>(null);
+    const wordGestureMotionSeenRef = useRef(false);
+    const wordStillFrameCountRef = useRef(0);
+    const wordCompletedGestureProbeCountRef = useRef(0);
+    const wordLastCompletedGestureProbeFrameRef = useRef(-Infinity);
+    const wordFullWindowStartedRef = useRef(false);
+    const wordResultLockedRef = useRef(false);
+    const wordResultLockFrameCountRef = useRef(0);
+    const wordResultLockStillFrameCountRef = useRef(0);
+    const wordResultTransitionFramesRef = useRef<Float32Array[]>([]);
     const wordPredictionHistoryRef = useRef<WordPredictionHistoryItem[]>([]);
     const wordFrameCountRef = useRef(0);
     const wordInferenceLogCounterRef = useRef(0);
+    const wordAttemptIdRef = useRef(0);
     const lastStableWordPredictionRef = useRef<StableWordPrediction | null>(null);
     const lastEmittedWordLabelRef = useRef<string | null>(null);
     const missingHandFrameCountRef = useRef(0);
@@ -216,12 +303,24 @@ export default function DetectScreen() {
     }, []);
 
     const clearAlphabetBuffers = useCallback(() => {
+        lastEmittedAlphabetLabelRef.current = null;
         alphabetPredictionHistoryRef.current = [];
         cancelPendingAlphabetFrame();
     }, [cancelPendingAlphabetFrame]);
 
     const clearWordBuffers = useCallback(() => {
+        wordAttemptIdRef.current += 1;
         wordFrameBufferRef.current = [];
+        previousWordFrameRef.current = null;
+        wordGestureMotionSeenRef.current = false;
+        wordStillFrameCountRef.current = 0;
+        wordCompletedGestureProbeCountRef.current = 0;
+        wordLastCompletedGestureProbeFrameRef.current = -Infinity;
+        wordFullWindowStartedRef.current = false;
+        wordResultLockedRef.current = false;
+        wordResultLockFrameCountRef.current = 0;
+        wordResultLockStillFrameCountRef.current = 0;
+        wordResultTransitionFramesRef.current = [];
         wordPredictionHistoryRef.current = [];
         wordFrameCountRef.current = 0;
         wordInferenceLogCounterRef.current = 0;
@@ -242,6 +341,22 @@ export default function DetectScreen() {
     }, []);
 
     const resetWordPredictionState = useCallback(() => {
+        // A confirmed hand gap marks the boundary between two signing attempts.
+        // Discard every frame from the previous attempt so the next prediction
+        // is built only from fresh frames belonging to the new gesture.
+        wordAttemptIdRef.current += 1;
+        wordFrameBufferRef.current = [];
+        previousWordFrameRef.current = null;
+        wordGestureMotionSeenRef.current = false;
+        wordStillFrameCountRef.current = 0;
+        wordCompletedGestureProbeCountRef.current = 0;
+        wordLastCompletedGestureProbeFrameRef.current = -Infinity;
+        wordFullWindowStartedRef.current = false;
+        wordResultLockedRef.current = false;
+        wordResultLockFrameCountRef.current = 0;
+        wordResultLockStillFrameCountRef.current = 0;
+        wordResultTransitionFramesRef.current = [];
+        wordFrameCountRef.current = 0;
         wordPredictionHistoryRef.current = [];
         wordInferenceLogCounterRef.current = 0;
         lastStableWordPredictionRef.current = null;
@@ -255,6 +370,7 @@ export default function DetectScreen() {
         setActiveMode(mode);
         setShowResult(false);
         setDetectedLabel(null);
+        setPerformanceInfo('');
         clearAlphabetBuffers();
         clearWordBuffers();
         setDebugInfo(nextError
@@ -403,13 +519,19 @@ export default function DetectScreen() {
         processingAlphabetRequestRef.current = frame.requestId;
 
         try {
+            const inferenceStartedAt = Date.now();
             const result = await alphabetClassifierRef.current.classify(frame);
+            const inferenceMs = Date.now() - inferenceStartedAt;
             if (processingAlphabetRequestRef.current !== frame.requestId) return;
 
             const alternativesDebug = result.alternatives
                 .map(item => `${item.label}:${(item.confidence * 100).toFixed(0)}`)
                 .join(' ');
-            setDebugInfo(`Mode: Alphabet | ${alternativesDebug} | Gap:${(result.margin * 100).toFixed(0)}`);
+            setDebugInfo(
+                `Mode: Alphabet | ${alternativesDebug} | Gap:${(result.margin * 100).toFixed(0)} ` +
+                `Capture:${frame.captureMs?.toFixed(0) ?? '?'}ms ` +
+                `Bridge:${frame.bridgeMs?.toFixed(0) ?? '?'}ms Infer:${inferenceMs}ms`
+            );
 
             const isConfusableLetter = CONFUSABLE_ALPHABET_LABELS.has(result.label);
             const confidenceThreshold = isConfusableLetter
@@ -444,6 +566,13 @@ export default function DetectScreen() {
                 : alphabetPredictionHistoryRef.current.filter(letter => letter === result.label).length;
 
             if (isQuickAccept || repeatedLetterCount >= requiredRepeatCount) {
+                // Continue checking frames so a different letter is recognized
+                // immediately, but do not repeatedly announce the held letter.
+                if (result.label === lastEmittedAlphabetLabelRef.current) {
+                    alphabetPredictionHistoryRef.current = [];
+                    return;
+                }
+
                 const label: FSLLabel = {
                     id: 200 + result.index,
                     english: result.label,
@@ -457,6 +586,7 @@ export default function DetectScreen() {
                 setStatus(`${result.label} (${(result.confidence * 100).toFixed(0)}%)`);
                 cameraRef.current?.speak(result.label, 'fil-PH');
                 lastDetectionRef.current = Date.now();
+                lastEmittedAlphabetLabelRef.current = result.label;
                 alphabetPredictionHistoryRef.current = [];
             }
         } catch (error) {
@@ -473,22 +603,46 @@ export default function DetectScreen() {
         }
     }, [activeMode, canDetect, keepResultVisible]);
 
-    const classifyWordSlidingWindow = useCallback(async (frames: Float32Array[]) => {
+    const classifyWordSlidingWindow = useCallback(async (
+        frames: Float32Array[],
+        policy: WordInferencePolicy,
+        observedFrameCount: number
+    ) => {
         if (!canDetect || activeMode !== 'word') return;
         if (isWordProcessingRef.current) return;
 
+        const attemptId = wordAttemptIdRef.current;
         isWordProcessingRef.current = true;
         if (!lastEmittedWordLabelRef.current) {
             setStatus('Sinusuri ang salita...');
         }
 
         try {
+            const inferenceStartedAt = Date.now();
             const result = await signClassifierRef.current.classifyFSL(frames);
+            const inferenceMs = Date.now() - inferenceStartedAt;
+            // The hands may have disappeared while inference was running. An
+            // answer from that old attempt must not overwrite the next one.
+            if (attemptId !== wordAttemptIdRef.current) return;
             const inferenceLogIndex = ++wordInferenceLogCounterRef.current;
             const shouldLogInference = inferenceLogIndex <= 5 ||
                 inferenceLogIndex % WORD_INFERENCE_LOG_INTERVAL === 0;
 
-            const acceptedPrediction: WordPredictionHistoryItem = result.confidence >= WORD_CONFIDENCE_THRESHOLD
+            let secondConfidence = 0;
+            for (let index = 0; index < result.probabilities.length; index++) {
+                if (index !== result.labelIndex) {
+                    secondConfidence = Math.max(secondConfidence, result.probabilities[index]);
+                }
+            }
+            const predictionMargin = result.confidence - secondConfidence;
+            const deferredPartialThankYou =
+                policy.source === 'completed' &&
+                normalizeLabelKey(result.label) === 'THANK YOU' &&
+                observedFrameCount < WORD_THANK_YOU_MIN_FRAMES;
+            const acceptedPrediction: WordPredictionHistoryItem =
+                !deferredPartialThankYou &&
+                result.confidence >= policy.confidenceThreshold &&
+                predictionMargin >= policy.marginThreshold
                 ? {
                     label: result.label,
                     labelIndex: result.labelIndex,
@@ -498,8 +652,11 @@ export default function DetectScreen() {
 
             if (!acceptedPrediction && shouldLogInference) {
                 console.log(
-                    `[Detect] Word confidence below threshold ${WORD_CONFIDENCE_THRESHOLD}: ` +
-                    `${result.label}:${result.confidence.toFixed(4)}`
+                    `[Detect] Word ${policy.source} prediction rejected ` +
+                    `(confidence>=${policy.confidenceThreshold}, margin>=${policy.marginThreshold}): ` +
+                    `${result.label}:${result.confidence.toFixed(4)} ` +
+                    `margin:${predictionMargin.toFixed(4)} source:${policy.source} ` +
+                    `deferred:${deferredPartialThankYou}`
                 );
             }
 
@@ -509,7 +666,7 @@ export default function DetectScreen() {
             }
 
             const stablePrediction = acceptedPrediction &&
-                acceptedPrediction.confidence >= WORD_QUICK_ACCEPT_THRESHOLD
+                acceptedPrediction.confidence >= policy.quickAcceptThreshold
                 ? acceptedPrediction
                 : getMajorityWordPrediction(wordPredictionHistoryRef.current);
             if (stablePrediction) {
@@ -532,6 +689,10 @@ export default function DetectScreen() {
                 setStatus(`${displayLabel.english} (${(stablePrediction.confidence * 100).toFixed(0)}%)`);
                 cameraRef.current?.speak(displayLabel.filipino || displayLabel.english, 'fil-PH');
                 lastEmittedWordLabelRef.current = stablePrediction.label;
+                wordResultLockedRef.current = true;
+                wordResultLockFrameCountRef.current = 0;
+                wordResultLockStillFrameCountRef.current = 0;
+                wordResultTransitionFramesRef.current = [];
             }
 
             if (shouldLogInference || shouldEmitPrediction) {
@@ -545,7 +706,9 @@ export default function DetectScreen() {
                     `Mode: Word | Pred:${result.label}:${(result.confidence * 100).toFixed(0)} ` +
                     `Stable:${lastStablePrediction?.label ?? 'none'} ` +
                     `Emitted:${lastEmittedWordLabelRef.current ?? 'none'} ` +
-                    `Hist:${historyDebug} Swap:${SWAP_HANDS_FOR_MIRROR}`
+                    `Hist:${historyDebug} Gap:${(predictionMargin * 100).toFixed(0)} ` +
+                    `Source:${policy.source} Frames:${observedFrameCount} ` +
+                    `Deferred:${deferredPartialThankYou} Infer:${inferenceMs}ms Swap:${SWAP_HANDS_FOR_MIRROR}`
                 );
             }
         } catch (error) {
@@ -570,7 +733,7 @@ export default function DetectScreen() {
             console.log(`[Detect] incoming keypoints length: ${keypoints.length}`);
         }
 
-        const wordFrame = convertHolisticFrameToWordFrame(keypoints);
+        const wordFrame = convertLandmarkFrameToWordFrame(keypoints);
         if (!wordFrame) {
             setDebugInfo(`Mode: Word | Bad keypoints:${keypoints.length}`);
             return;
@@ -579,13 +742,90 @@ export default function DetectScreen() {
             console.log(`[Detect] converted frame length: ${wordFrame.length}`);
         }
 
-        const sequenceLength = wordSequenceLengthRef.current;
-        wordFrameBufferRef.current.push(wordFrame);
-        while (wordFrameBufferRef.current.length > sequenceLength) {
-            wordFrameBufferRef.current.shift();
+        const previousWordFrame = previousWordFrameRef.current;
+        const handMotion = previousWordFrame
+            ? calculateHandMotion(previousWordFrame, wordFrame)
+            : 0;
+        previousWordFrameRef.current = wordFrame;
+
+        if (wordResultLockedRef.current) {
+            if (!handsDetected || !previousWordFrame) return;
+
+            wordResultLockFrameCountRef.current += 1;
+            if (handMotion < WORD_HAND_MOTION_THRESHOLD) {
+                wordResultLockStillFrameCountRef.current += 1;
+                wordResultTransitionFramesRef.current = [];
+                return;
+            }
+
+            // Keep the opening motion instead of throwing it away while the
+            // previous result is visible. Those frames distinguish the next
+            // sign and are especially important when signs are back-to-back.
+            wordResultTransitionFramesRef.current.push(wordFrame);
+
+            const signerPausedAfterResult =
+                wordResultLockStillFrameCountRef.current >= WORD_RESULT_REARM_STILL_FRAMES;
+            const transitionHasClearlyStarted =
+                wordResultTransitionFramesRef.current.length >= WORD_RESULT_REARM_MOTION_FRAMES;
+            if (!signerPausedAfterResult && !transitionHasClearlyStarted) return;
+
+            // A new motion phase starts a fresh signing attempt. Seed it with
+            // every transition frame except the current one, which the common
+            // buffer path below will append exactly once.
+            const transitionFrames = wordResultTransitionFramesRef.current;
+            wordAttemptIdRef.current += 1;
+            wordFrameBufferRef.current = transitionFrames.slice(0, -1);
+            wordPredictionHistoryRef.current = [];
+            wordFrameCountRef.current = wordFrameBufferRef.current.length;
+            wordInferenceLogCounterRef.current = 0;
+            lastStableWordPredictionRef.current = null;
+            lastEmittedWordLabelRef.current = null;
+            wordGestureMotionSeenRef.current = true;
+            wordStillFrameCountRef.current = 0;
+            wordCompletedGestureProbeCountRef.current = 0;
+            wordLastCompletedGestureProbeFrameRef.current = -Infinity;
+            wordFullWindowStartedRef.current = false;
+            wordResultLockedRef.current = false;
+            wordResultLockFrameCountRef.current = 0;
+            wordResultLockStillFrameCountRef.current = 0;
+            wordResultTransitionFramesRef.current = [];
+            setShowResult(false);
         }
 
-        wordFrameCountRef.current += 1;
+        if (handsDetected && previousWordFrame) {
+            if (handMotion >= WORD_HAND_MOTION_THRESHOLD) {
+                if (wordCompletedGestureProbeCountRef.current > 0) {
+                    // Motion resumed after an early probe, so predictions from
+                    // that incomplete endpoint must not stabilize a later one.
+                    wordPredictionHistoryRef.current = [];
+                    lastStableWordPredictionRef.current = null;
+                }
+                wordGestureMotionSeenRef.current = true;
+                wordStillFrameCountRef.current = 0;
+                wordCompletedGestureProbeCountRef.current = 0;
+                wordLastCompletedGestureProbeFrameRef.current = -Infinity;
+            } else if (wordGestureMotionSeenRef.current) {
+                wordStillFrameCountRef.current += 1;
+            }
+        }
+
+        const sequenceLength = wordSequenceLengthRef.current;
+        wordFrameBufferRef.current.push(wordFrame);
+        if (!wordGestureMotionSeenRef.current) {
+            // Hands can be visible for a long time while the signer prepares.
+            // Keep only a tiny lead-in so idle/setup frames do not dominate the
+            // model input or make the actual gesture arrive too late.
+            while (wordFrameBufferRef.current.length > WORD_GESTURE_PRE_ROLL_FRAMES) {
+                wordFrameBufferRef.current.shift();
+            }
+            wordFrameCountRef.current = wordFrameBufferRef.current.length;
+        } else {
+            while (wordFrameBufferRef.current.length > sequenceLength) {
+                wordFrameBufferRef.current.shift();
+            }
+            wordFrameCountRef.current += 1;
+        }
+
         const bufferLength = wordFrameBufferRef.current.length;
         const lastStablePrediction = lastStableWordPredictionRef.current;
         if (shouldLogWordFrame) {
@@ -593,12 +833,33 @@ export default function DetectScreen() {
             setDebugInfo(
                 `Mode: Word | LH:${leftVisible} RH:${rightVisible} ` +
                 `Buffer:${bufferLength}/${sequenceLength} ` +
-                `Frame:${wordFrameCountRef.current} Stable:${lastStablePrediction?.label ?? 'none'}`
+                `Frame:${wordFrameCountRef.current} Motion:${handMotion.toFixed(4)} ` +
+                `Still:${wordStillFrameCountRef.current} ` +
+                `Probe:${wordCompletedGestureProbeCountRef.current}/${WORD_COMPLETED_GESTURE_MAX_PROBES} ` +
+                `Stable:${lastStablePrediction?.label ?? 'none'}`
             );
         }
 
         if (!handsDetected) return;
-        if (bufferLength !== sequenceLength) return;
+        const hasCompleteWindow = bufferLength === sequenceLength;
+        if (hasCompleteWindow && !wordFullWindowStartedRef.current) {
+            // Early padded probes use a stricter but different input shape in
+            // time. Never let their history vote on the first true 30-frame
+            // window if early recognition did not succeed.
+            wordFullWindowStartedRef.current = true;
+            wordPredictionHistoryRef.current = [];
+            lastStableWordPredictionRef.current = null;
+        }
+        const completedGestureProbeDue =
+            wordFrameCountRef.current - wordLastCompletedGestureProbeFrameRef.current >=
+            WORD_COMPLETED_GESTURE_PROBE_STRIDE;
+        const hasCompletedGesture =
+            bufferLength >= Math.min(WORD_GESTURE_MIN_FRAMES, sequenceLength) &&
+            wordGestureMotionSeenRef.current &&
+            wordStillFrameCountRef.current >= WORD_GESTURE_END_STILL_FRAMES &&
+            wordCompletedGestureProbeCountRef.current < WORD_COMPLETED_GESTURE_MAX_PROBES &&
+            completedGestureProbeDue;
+        if (!hasCompleteWindow && !hasCompletedGesture) return;
         if (wordFrameCountRef.current % WORD_PREDICTION_STRIDE !== 0) return;
         if (isWordProcessingRef.current) {
             setDebugInfo(
@@ -608,10 +869,20 @@ export default function DetectScreen() {
             return;
         }
 
-        // Frame objects are immutable after insertion, so a shallow window
-        // snapshot is sufficient and avoids 30 typed-array allocations.
-        const frames = wordFrameBufferRef.current.slice();
-        await classifyWordSlidingWindow(frames);
+        // A completed short gesture is distributed across the 30-frame input
+        // so its motion is not drowned out by copies of the final pose.
+        const frames = hasCompleteWindow
+            ? wordFrameBufferRef.current.slice()
+            : resampleCompletedGesture(wordFrameBufferRef.current, sequenceLength);
+        if (!hasCompleteWindow) {
+            wordCompletedGestureProbeCountRef.current += 1;
+            wordLastCompletedGestureProbeFrameRef.current = wordFrameCountRef.current;
+        }
+        await classifyWordSlidingWindow(
+            frames,
+            hasCompleteWindow ? FULL_WORD_INFERENCE_POLICY : COMPLETED_WORD_INFERENCE_POLICY,
+            bufferLength
+        );
     }, [activeMode, canDetect, classifyWordSlidingWindow]);
 
     const handleHandsMissing = useCallback(() => {
@@ -664,7 +935,11 @@ export default function DetectScreen() {
 
             if (!handsDetected) {
                 handleHandsMissing();
-                await processWordKeypoints(keypoints, false);
+                // Keep very brief tracking dropouts inside an active gesture,
+                // but never refill a reset buffer with handless frames.
+                if (missingHandFrameCountRef.current < NO_HANDS_GRACE_FRAMES) {
+                    await processWordKeypoints(keypoints, false);
+                }
                 return;
             }
 
@@ -689,6 +964,16 @@ export default function DetectScreen() {
     const handleCameraReady = useCallback(() => {
         setCameraError(null);
         setIsCameraReady(true);
+    }, []);
+
+    const handleCameraPerformance = useCallback((metrics: CameraPerformanceMetrics) => {
+        setPerformanceInfo(
+            `${metrics.mode === 'word' ? 'Pose+Hands' : 'Hands'}:` +
+            `${metrics.processedFps.toFixed(1)}fps ` +
+            `MP:${metrics.averageMediaPipeMs.toFixed(0)}ms ` +
+            `Bridge:${metrics.bridgeMs?.toFixed(0) ?? '?'}ms ` +
+            `Batch:${metrics.bridgeBatchSize}`
+        );
     }, []);
 
     const handleCameraIssue = useCallback((message: string) => {
@@ -724,6 +1009,7 @@ export default function DetectScreen() {
                     style={styles.camera}
                     onKeypointsExtracted={handleKeypointsExtracted}
                     onImageFrameCaptured={handleImageFrameCaptured}
+                    onPerformance={handleCameraPerformance}
                     onReady={handleCameraReady}
                     onError={handleCameraIssue}
                     active={isFocused}
@@ -761,9 +1047,10 @@ export default function DetectScreen() {
                     <Text style={styles.statusText}>{status}</Text>
                 </View>
 
-                {!!debugInfo && (
+                {!!(debugInfo || performanceInfo) && (
                     <View style={styles.debugPanel}>
                         <Text style={styles.debugText}>{debugInfo}</Text>
+                        {!!performanceInfo && <Text style={styles.debugText}>{performanceInfo}</Text>}
                     </View>
                 )}
 

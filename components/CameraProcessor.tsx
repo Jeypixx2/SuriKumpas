@@ -13,6 +13,7 @@ const debugLog = (...args: unknown[]) => {
 interface CameraProcessorProps {
     onKeypointsExtracted?: (keypoints: Float32Array | 'hands-detected' | 'no-hands') => void;
     onImageFrameCaptured?: (frame: CameraImageFrame) => void;
+    onPerformance?: (metrics: CameraPerformanceMetrics) => void;
     onReady?: () => void;
     onError?: (message: string) => void;
     style?: any;
@@ -26,6 +27,16 @@ export interface CameraImageFrame {
     height: number;
     rgb: Uint8Array;
     channels: 3;
+    captureMs?: number;
+    bridgeMs?: number;
+}
+
+export interface CameraPerformanceMetrics {
+    mode: 'alphabet' | 'word';
+    processedFps: number;
+    averageMediaPipeMs: number;
+    bridgeBatchSize: number;
+    bridgeMs?: number;
 }
 
 export interface CameraProcessorRef {
@@ -38,18 +49,41 @@ const MEDIAPIPE_SCRIPT = `
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/holistic/holistic.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
     <script>
         let videoElement = null;
         let canvasElement = null;
         let canvasCtx = null;
-        let holistic = null;
+        let poseTracker = null;
+        let handsTracker = null;
+        let latestPoseResults = null;
+        let latestHandsResults = null;
+        let wordProcessedFrameCount = 0;
+        let wordKeypointBatch = [];
+        let wordInputCanvas = null;
+        let wordInputCtx = null;
         let isProcessing = false;
         let recognitionMode = 'alphabet';
         let lastAlphabetSignalAt = 0;
+        let lastCanvasDrawAt = 0;
+        const ALPHABET_SIGNAL_INTERVAL_MS = 66;
+        const WORD_BRIDGE_BATCH_SIZE = 1;
+        let performanceWindowStartedAt = performance.now();
+        let performanceFrameCount = 0;
+        let performanceTotalProcessingMs = 0;
 
         window.setRecognitionMode = function(mode) {
-            recognitionMode = mode === 'word' ? 'word' : 'alphabet';
+            const nextMode = mode === 'word' ? 'word' : 'alphabet';
+            if (nextMode !== recognitionMode) {
+                wordKeypointBatch = [];
+                latestPoseResults = null;
+                wordProcessedFrameCount = 0;
+                performanceWindowStartedAt = performance.now();
+                performanceFrameCount = 0;
+                performanceTotalProcessingMs = 0;
+            }
+            recognitionMode = nextMode;
         };
 
         window.onerror = function(msg) {
@@ -108,11 +142,11 @@ const MEDIAPIPE_SCRIPT = `
             latestHandBounds = { minX, minY, maxX, maxY, seenAt: Date.now() };
         }
 
-        function rgbBytesToBase64(rgb) {
+        function bytesToBase64(bytes) {
             let binary = '';
             const chunkSize = 8192;
-            for (let i = 0; i < rgb.length; i += chunkSize) {
-                const chunk = rgb.subarray(i, i + chunkSize);
+            for (let i = 0; i < bytes.length; i += chunkSize) {
+                const chunk = bytes.subarray(i, i + chunkSize);
                 let chunkString = '';
                 for (let j = 0; j < chunk.length; j++) {
                     chunkString += String.fromCharCode(chunk[j]);
@@ -123,6 +157,7 @@ const MEDIAPIPE_SCRIPT = `
         }
 
         window.captureAlphabetFrame = function(requestId, mirror) {
+            const captureStartedAt = performance.now();
             try {
                 if (!videoElement || videoElement.readyState < 2) {
                     throw new Error('Video is not ready yet.');
@@ -189,13 +224,16 @@ const MEDIAPIPE_SCRIPT = `
                     rgb[rgbIndex + 2] = rgba[rgbaIndex + 2];
                 }
 
+                const encodedRgb = bytesToBase64(rgb);
                 window.ReactNativeWebView.postMessage(JSON.stringify({
                     type: 'image-frame',
                     requestId,
                     width: 160,
                     height: 160,
                     channels: 3,
-                    data: rgbBytesToBase64(rgb)
+                    data: encodedRgb,
+                    captureMs: performance.now() - captureStartedAt,
+                    sentAt: Date.now()
                 }));
             } catch (e) {
                 window.ReactNativeWebView.postMessage(JSON.stringify({
@@ -215,7 +253,7 @@ const MEDIAPIPE_SCRIPT = `
             // 1. Pose: 33 * 4 = 132 values
             const pose = results.poseLandmarks || [];
             for (let i = 0; i < 33; i++) {
-                if (i < pose.length) { const lm = pose[i]; kp.push(r(lm.x), r(lm.y), r(lm.z), r(lm.visibility || 1)); }
+                if (i < pose.length) { const lm = pose[i]; kp.push(r(lm.x), r(lm.y), r(lm.z), r(lm.visibility ?? 1)); }
                 else { kp.push(0, 0, 0, 0); }
             }
             
@@ -243,26 +281,34 @@ const MEDIAPIPE_SCRIPT = `
                 (results.rightHandLandmarks && results.rightHandLandmarks.length)
             );
 
-            canvasCtx.save();
-            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
-            
-            // Draw hands only — pose skeleton is expensive and irrelevant for sign classification
-            if (results.leftHandLandmarks) {
-                drawConnectors(canvasCtx, results.leftHandLandmarks, HAND_CONNECTIONS, {color: '#00FFCC', lineWidth: 1.5});
-                drawLandmarks(canvasCtx, results.leftHandLandmarks, {color: '#ffffff', lineWidth: 1, radius: 2});
+            const resultTime = Date.now();
+            const shouldDraw = recognitionMode !== 'word' || !hasHands ||
+                resultTime - lastCanvasDrawAt >= 66;
+            if (shouldDraw) {
+                lastCanvasDrawAt = resultTime;
+                canvasCtx.save();
+                canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+
+                // Keep the visual overlay near 15 FPS in word mode. Landmark
+                // extraction continues at full speed for recognition.
+                if (results.leftHandLandmarks) {
+                    drawConnectors(canvasCtx, results.leftHandLandmarks, HAND_CONNECTIONS, {color: '#00FFCC', lineWidth: 1.5});
+                    drawLandmarks(canvasCtx, results.leftHandLandmarks, {color: '#ffffff', lineWidth: 1, radius: 2});
+                }
+                if (results.rightHandLandmarks) {
+                    drawConnectors(canvasCtx, results.rightHandLandmarks, HAND_CONNECTIONS, {color: '#00FFCC', lineWidth: 1.5});
+                    drawLandmarks(canvasCtx, results.rightHandLandmarks, {color: '#ffffff', lineWidth: 1, radius: 2});
+                }
+
+                canvasCtx.restore();
             }
-            if (results.rightHandLandmarks) {
-                drawConnectors(canvasCtx, results.rightHandLandmarks, HAND_CONNECTIONS, {color: '#00FFCC', lineWidth: 1.5});
-                drawLandmarks(canvasCtx, results.rightHandLandmarks, {color: '#ffffff', lineWidth: 1, radius: 2});
-            }
-            
-            canvasCtx.restore();
 
             // Alphabet classification only needs a small hand-presence signal.
-            // Limit it to 10 Hz so React Native stays free for image inference/UI.
+            // Limit it to about 15 Hz so React Native stays responsive while
+            // reducing the wait before the next eligible image inference.
             if (recognitionMode === 'alphabet') {
                 const now = Date.now();
-                if (now - lastAlphabetSignalAt >= 100) {
+                if (now - lastAlphabetSignalAt >= ALPHABET_SIGNAL_INTERVAL_MS) {
                     lastAlphabetSignalAt = now;
                     window.ReactNativeWebView.postMessage(JSON.stringify({
                         type: hasHands ? 'hands-detected' : 'no-hands'
@@ -271,35 +317,127 @@ const MEDIAPIPE_SCRIPT = `
                 return;
             }
 
+            const keypoints = new Float32Array(extractKeypoints(results));
+            wordKeypointBatch.push({
+                handsDetected: hasHands,
+                data: bytesToBase64(new Uint8Array(keypoints.buffer))
+            });
+
+            // Send each compact 1,032-byte frame immediately. Waiting for a
+            // second frame adds visible delay at the lower FPS seen on phones.
+            if (wordKeypointBatch.length >= WORD_BRIDGE_BATCH_SIZE) {
+                window.ReactNativeWebView.postMessage(JSON.stringify({
+                    type: 'word-keypoints-batch',
+                    frames: wordKeypointBatch,
+                    sentAt: Date.now()
+                }));
+                wordKeypointBatch = [];
+            }
+        }
+
+        function recordPerformance(processingMs) {
+            performanceFrameCount += 1;
+            performanceTotalProcessingMs += processingMs;
+
+            const now = performance.now();
+            const elapsedMs = now - performanceWindowStartedAt;
+            if (elapsedMs < 2000) return;
+
             window.ReactNativeWebView.postMessage(JSON.stringify({
-                type: hasHands ? 'keypoints' : 'no-hands-keypoints',
-                data: extractKeypoints(results)
+                type: 'performance',
+                mode: recognitionMode,
+                processedFps: performanceFrameCount * 1000 / elapsedMs,
+                averageMediaPipeMs: performanceTotalProcessingMs / performanceFrameCount,
+                bridgeBatchSize: recognitionMode === 'word' ? WORD_BRIDGE_BATCH_SIZE : 1,
+                sentAt: Date.now()
             }));
+            performanceWindowStartedAt = now;
+            performanceFrameCount = 0;
+            performanceTotalProcessingMs = 0;
+        }
+
+        function onHandsResults(results) {
+            latestHandsResults = results;
+        }
+
+        function onPoseResults(results) {
+            latestPoseResults = results;
+        }
+
+        function emitCombinedResults(poseLandmarks = []) {
+            const handLandmarks = latestHandsResults?.multiHandLandmarks || [];
+            const handedness = latestHandsResults?.multiHandedness || [];
+            let leftHandLandmarks = [];
+            let rightHandLandmarks = [];
+
+            for (let index = 0; index < handLandmarks.length; index++) {
+                const landmarks = handLandmarks[index];
+                const handednessEntry = handedness[index];
+                const label = handednessEntry?.label || handednessEntry?.[0]?.label;
+
+                // MediaPipe Hands labels assume a mirrored selfie image. The
+                // camera pixels are not mirrored (only the display CSS is), so
+                // swap the reported labels to preserve the word model's LH/RH order.
+                if (label === 'Left') {
+                    rightHandLandmarks = landmarks;
+                } else if (label === 'Right') {
+                    leftHandLandmarks = landmarks;
+                } else if ((landmarks[0]?.x ?? 0.5) < 0.5) {
+                    rightHandLandmarks = landmarks;
+                } else {
+                    leftHandLandmarks = landmarks;
+                }
+            }
+
+            onResults({
+                poseLandmarks,
+                leftHandLandmarks,
+                rightHandLandmarks
+            });
         }
         
-        async function initHolistic() {
+        async function initLandmarkers() {
             try {
                 log('Initializing...');
                 videoElement = document.getElementById('input_video');
                 canvasElement = document.getElementById('output_canvas');
                 canvasCtx = canvasElement.getContext('2d');
 
-                holistic = new Holistic({ locateFile: (file) => 'https://cdn.jsdelivr.net/npm/@mediapipe/holistic/' + file });
-                holistic.setOptions({
+                wordInputCanvas = document.createElement('canvas');
+                wordInputCanvas.width = 192;
+                wordInputCanvas.height = 144;
+                wordInputCtx = wordInputCanvas.getContext('2d', { alpha: false });
+                wordInputCtx.imageSmoothingEnabled = false;
+
+                poseTracker = new Pose({ locateFile: (file) => 'https://cdn.jsdelivr.net/npm/@mediapipe/pose/' + file });
+                poseTracker.setOptions({
                     modelComplexity: 0,
-                    selfieMode: false,          // Align landmarks with mirrored display via CSS instead
+                    selfieMode: false,
                     smoothLandmarks: true,
                     enableSegmentation: false,
                     smoothSegmentation: false,
-                    refineFaceLandmarks: false,
                     minDetectionConfidence: 0.5,
                     minTrackingConfidence: 0.5
                 });
-                holistic.onResults(onResults);
+                poseTracker.onResults(onPoseResults);
+
+                handsTracker = new Hands({ locateFile: (file) => 'https://cdn.jsdelivr.net/npm/@mediapipe/hands/' + file });
+                handsTracker.setOptions({
+                    maxNumHands: 2,
+                    modelComplexity: 0,
+                    minDetectionConfidence: 0.5,
+                    minTrackingConfidence: 0.5
+                });
+                handsTracker.onResults(onHandsResults);
 
                 // Request front camera explicitly
                 const stream = await navigator.mediaDevices.getUserMedia({
-                    video: { facingMode: 'user', width: 320, height: 240 },
+                    video: {
+                        facingMode: 'user',
+                        width: 320,
+                        height: 240,
+                        frameRate: { ideal: 30, max: 30 }
+                    },
                     audio: false
                 });
                 videoElement.srcObject = stream;
@@ -315,9 +453,36 @@ const MEDIAPIPE_SCRIPT = `
                     if (!isProcessing && (!window.lastTick || now - window.lastTick > 33)) {
                         isProcessing = true;
                         window.lastTick = now;
-                        try { await holistic.send({ image: videoElement }); }
+                        const processingStartedAt = performance.now();
+                        let processedFrame = false;
+                        try {
+                            latestHandsResults = null;
+                            if (recognitionMode === 'word') {
+                                wordInputCtx.drawImage(videoElement, 0, 0, 192, 144);
+                                wordProcessedFrameCount += 1;
+
+                                // Body pose changes much more slowly than hand
+                                // shape. Refresh it every third word frame and
+                                // spend the saved work tracking hands each time.
+                                if (!latestPoseResults || wordProcessedFrameCount % 3 === 1) {
+                                    await poseTracker.send({ image: wordInputCanvas });
+                                }
+                                await handsTracker.send({ image: wordInputCanvas });
+                                emitCombinedResults(latestPoseResults?.poseLandmarks || []);
+                            } else {
+                                // Alphabet remains on its existing fast hand-only path.
+                                await handsTracker.send({ image: videoElement });
+                                emitCombinedResults();
+                            }
+                            processedFrame = true;
+                        }
                         catch(e) { log('Send error: ' + e.message); }
-                        finally { isProcessing = false; }
+                        finally {
+                            if (processedFrame) {
+                                recordPerformance(performance.now() - processingStartedAt);
+                            }
+                            isProcessing = false;
+                        }
                     }
                     requestAnimationFrame(tick);
                 }
@@ -340,7 +505,7 @@ const MEDIAPIPE_SCRIPT = `
             }
         }
         
-        window.addEventListener('DOMContentLoaded', initHolistic);
+        window.addEventListener('DOMContentLoaded', initLandmarkers);
     </script>
 `;
 
@@ -348,6 +513,7 @@ const CameraProcessor = forwardRef<CameraProcessorRef, CameraProcessorProps>(
     ({
         onKeypointsExtracted,
         onImageFrameCaptured,
+        onPerformance,
         onReady,
         onError,
         style,
@@ -357,6 +523,7 @@ const CameraProcessor = forwardRef<CameraProcessorRef, CameraProcessorProps>(
         const [permission, requestPermission] = useCameraPermissions();
         const [isWebViewReady, setIsWebViewReady] = useState(false);
         const webViewRef = useRef<WebView>(null);
+        const lastBridgeMsRef = useRef<number | undefined>(undefined);
         const WebViewWithAndroidPermissions = WebView as React.ComponentType<any>;
 
         useImperativeHandle(ref, () => ({
@@ -458,6 +625,16 @@ const CameraProcessor = forwardRef<CameraProcessorRef, CameraProcessorProps>(
                     if (CAMERA_DEBUG && Math.random() < 0.05) debugLog(`[CameraProcessor] Received keypoints, length: ${message.data.length}`);
                     const keypoints = new Float32Array(message.data);
                     onKeypointsExtracted?.(keypoints);
+                } else if (message.type === 'word-keypoints-batch') {
+                    const bridgeMs = typeof message.sentAt === 'number'
+                        ? Math.max(0, Date.now() - message.sentAt)
+                        : undefined;
+                    lastBridgeMsRef.current = bridgeMs;
+                    for (const frame of message.frames || []) {
+                        const bytes = new Uint8Array(Buffer.from(frame.data, 'base64'));
+                        const keypoints = new Float32Array(bytes.buffer);
+                        onKeypointsExtracted?.(keypoints);
+                    }
                 } else if (message.type === 'no-hands-keypoints') {
                     const keypoints = new Float32Array(message.data);
                     onKeypointsExtracted?.(keypoints);
@@ -467,12 +644,30 @@ const CameraProcessor = forwardRef<CameraProcessorRef, CameraProcessorProps>(
                     onKeypointsExtracted?.('no-hands');
                 } else if (message.type === 'image-frame') {
                     const rgb = new Uint8Array(Buffer.from(message.data, 'base64'));
+                    const bridgeMs = typeof message.sentAt === 'number'
+                        ? Math.max(0, Date.now() - message.sentAt)
+                        : undefined;
+                    lastBridgeMsRef.current = bridgeMs;
                     onImageFrameCaptured?.({
                         requestId: message.requestId,
                         width: message.width,
                         height: message.height,
                         channels: 3,
                         rgb,
+                        captureMs: message.captureMs,
+                        bridgeMs,
+                    });
+                } else if (message.type === 'performance') {
+                    onPerformance?.({
+                        mode: message.mode === 'word' ? 'word' : 'alphabet',
+                        processedFps: Number(message.processedFps) || 0,
+                        averageMediaPipeMs: Number(message.averageMediaPipeMs) || 0,
+                        bridgeBatchSize: Number(message.bridgeBatchSize) || 1,
+                        bridgeMs: lastBridgeMsRef.current ?? (
+                            typeof message.sentAt === 'number'
+                                ? Math.max(0, Date.now() - message.sentAt)
+                                : undefined
+                        ),
                     });
                 } else if (message.type === 'image-frame-error') {
                     debugLog('[CameraProcessor] Image frame error:', message.message);
@@ -490,7 +685,7 @@ const CameraProcessor = forwardRef<CameraProcessorRef, CameraProcessorProps>(
             } catch (error) {
                 console.error('Error parsing WebView message:', error);
             }
-        }, [onKeypointsExtracted, onImageFrameCaptured, onReady, onError]);
+        }, [onKeypointsExtracted, onImageFrameCaptured, onPerformance, onReady, onError]);
 
         const webViewPermissionProps = {
             onPermissionRequest: (event: any) => {

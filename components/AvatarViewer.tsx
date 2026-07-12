@@ -48,7 +48,6 @@ import { AvatarAnimator } from '../lib/AvatarAnimator';
 import { SequenceItem } from '../lib/labels';
 
 const AVATAR_TARGET_FRAME_MS = 33;
-const LETTER_PRELOAD_DELAY_MS = 1200;
 const ACTIVE_SIGN_PRELOAD_DELAY_MS = 900;
 const INACTIVE_SIGN_PRELOAD_DELAY_MS = 9000;
 const BACKGROUND_PRELOAD_GAP_MS = 450;
@@ -322,6 +321,16 @@ const CUSTOM_LETTERS: Record<string, any> = {
     'N': require('../assets/n.glb'),
     'O': require('../assets/o.glb'),
     'P': require('../assets/p.glb'),
+    'Q': require('../assets/q.glb'),
+    'R': require('../assets/r.glb'),
+    'S': require('../assets/s.glb'),
+    'T': require('../assets/t.glb'),
+    'U': require('../assets/u.glb'),
+    'V': require('../assets/v.glb'),
+    'W': require('../assets/w.glb'),
+    'X': require('../assets/x.glb'),
+    'Y': require('../assets/y.glb'),
+    'Z': require('../assets/z.glb'),
 };
 
 const PRIORITY_SIGN_PRELOADS = [
@@ -447,7 +456,6 @@ export default function AvatarViewer({
     const playRequestRef = useRef(0);
     const wordPreloadStartedRef = useRef(false);
     const wordPreloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const letterPreloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     useEffect(() => {
         activeRef.current = active;
@@ -664,8 +672,8 @@ export default function AvatarViewer({
                     await ensureAnimationLoaded(signToPlay, false, animator);
                     animator.playSignAnimation(signToPlay);
                 } else if (letterToPlay) {
+                    await ensureAnimationLoaded(letterToPlay, true, animator);
                     animator.playLetterAnimation(letterToPlay);
-                    preloadLetterAnimations([{ type: 'letter', value: letterToPlay, display: letterToPlay }], animator);
                 }
             };
             playInitial().finally(() => preloadPrioritySignAnimations(animator));
@@ -720,6 +728,16 @@ export default function AvatarViewer({
         await Promise.all(signs.map(sign => ensureAnimationLoaded(sign, false, animator)));
     };
 
+    const loadCustomLetterAnimations = async (sequence: SequenceItem[], animator: AvatarAnimator) => {
+        const letters = Array.from(new Set(
+            sequence
+                .filter(item => item.type === 'letter' && CUSTOM_LETTERS[item.value.toUpperCase()])
+                .map(item => item.value.toUpperCase())
+        ));
+
+        await Promise.all(letters.map(letter => ensureAnimationLoaded(letter, true, animator)));
+    };
+
     const preloadPrioritySignAnimations = (animator: AvatarAnimator) => {
         if (wordPreloadStartedRef.current) return;
         wordPreloadStartedRef.current = true;
@@ -735,39 +753,16 @@ export default function AvatarViewer({
         }, delayMs);
     };
 
-    const preloadLetterAnimations = (sequence: SequenceItem[], animator: AvatarAnimator) => {
-        const letters = Array.from(new Set(
-            sequence
-                .filter(item => item.type === 'letter' && CUSTOM_LETTERS[item.value.toUpperCase()])
-                .map(item => item.value.toUpperCase())
-        ));
-
-        if (letters.length === 0) return;
-
-        if (letterPreloadTimerRef.current) {
-            clearTimeout(letterPreloadTimerRef.current);
-        }
-
-        letterPreloadTimerRef.current = setTimeout(() => {
-            (async () => {
-                for (const letter of letters) {
-                    if (animatorRef.current !== animator) return;
-                    await waitForIdle();
-                    await ensureAnimationLoaded(letter, true, animator);
-                    await wait(BACKGROUND_PRELOAD_GAP_MS);
-                }
-            })().catch(err => console.warn('[Avatar] Background letter preload failed:', err));
-        }, LETTER_PRELOAD_DELAY_MS);
-    };
-
     const playSequenceWhenReady = async (sequence: SequenceItem[], animator: AvatarAnimator) => {
         const requestId = ++playRequestRef.current;
 
-        await loadCustomSignAnimations(sequence, animator);
+        await Promise.all([
+            loadCustomSignAnimations(sequence, animator),
+            loadCustomLetterAnimations(sequence, animator),
+        ]);
         if (requestId !== playRequestRef.current) return;
 
         animator.playSequence(sequence);
-        preloadLetterAnimations(sequence, animator);
     };
 
     useEffect(() => {
@@ -791,9 +786,11 @@ export default function AvatarViewer({
     useEffect(() => {
         const play = async () => {
             if (letterToPlay && animatorRef.current && !signToPlay) {
-                ++playRequestRef.current;
-                animatorRef.current.playLetterAnimation(letterToPlay);
-                preloadLetterAnimations([{ type: 'letter', value: letterToPlay, display: letterToPlay }], animatorRef.current);
+                const animator = animatorRef.current;
+                const requestId = ++playRequestRef.current;
+                await ensureAnimationLoaded(letterToPlay, true, animator);
+                if (requestId !== playRequestRef.current || animatorRef.current !== animator) return;
+                animator.playLetterAnimation(letterToPlay);
             }
         };
         play();
@@ -814,9 +811,6 @@ export default function AvatarViewer({
             ++playRequestRef.current;
             if (wordPreloadTimerRef.current) {
                 clearTimeout(wordPreloadTimerRef.current);
-            }
-            if (letterPreloadTimerRef.current) {
-                clearTimeout(letterPreloadTimerRef.current);
             }
             if (animationFrameRef.current) {
                 cancelAnimationFrame(animationFrameRef.current);
