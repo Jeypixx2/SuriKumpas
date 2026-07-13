@@ -68,6 +68,9 @@ const MEDIAPIPE_SCRIPT = `
         let lastCanvasDrawAt = 0;
         const ALPHABET_SIGNAL_INTERVAL_MS = 66;
         const WORD_BRIDGE_BATCH_SIZE = 1;
+        const WORD_INPUT_WIDTH = 192;
+        const WORD_INPUT_HEIGHT = 144;
+        const WORD_POSE_REFRESH_INTERVAL = 3;
         let performanceWindowStartedAt = performance.now();
         let performanceFrameCount = 0;
         let performanceTotalProcessingMs = 0;
@@ -394,8 +397,8 @@ const MEDIAPIPE_SCRIPT = `
                 canvasCtx = canvasElement.getContext('2d');
 
                 wordInputCanvas = document.createElement('canvas');
-                wordInputCanvas.width = 192;
-                wordInputCanvas.height = 144;
+                wordInputCanvas.width = WORD_INPUT_WIDTH;
+                wordInputCanvas.height = WORD_INPUT_HEIGHT;
                 wordInputCtx = wordInputCanvas.getContext('2d', { alpha: false });
                 wordInputCtx.imageSmoothingEnabled = false;
 
@@ -448,13 +451,22 @@ const MEDIAPIPE_SCRIPT = `
                         try {
                             latestHandsResults = null;
                             if (recognitionMode === 'word') {
-                                wordInputCtx.drawImage(videoElement, 0, 0, 192, 144);
+                                wordInputCtx.drawImage(
+                                    videoElement,
+                                    0,
+                                    0,
+                                    WORD_INPUT_WIDTH,
+                                    WORD_INPUT_HEIGHT
+                                );
                                 wordProcessedFrameCount += 1;
 
                                 // Body pose changes much more slowly than hand
-                                // shape. Refresh it every third word frame and
-                                // spend the saved work tracking hands each time.
-                                if (!latestPoseResults || wordProcessedFrameCount % 3 === 1) {
+                                // shape. Refresh it periodically and spend the
+                                // saved work tracking hands each time.
+                                if (
+                                    !latestPoseResults ||
+                                    wordProcessedFrameCount % WORD_POSE_REFRESH_INTERVAL === 1
+                                ) {
                                     await poseTracker.send({ image: wordInputCanvas });
                                 }
                                 await handsTracker.send({ image: wordInputCanvas });
