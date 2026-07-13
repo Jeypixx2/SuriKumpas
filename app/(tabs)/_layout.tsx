@@ -36,30 +36,30 @@ function BootLoadingOverlay() {
 
     const loadModels = async () => {
       await wait(200);
-      const results = await Promise.allSettled([
-        globalAlphabetImageClassifier.load(),
-        globalClassifier.loadFSLModel(),
-      ]);
+      let wordModelFailed = false;
 
-      const alphabetResult = results[0];
-      const wordResult = results[1];
-
-      if (alphabetResult.status === 'fulfilled') {
-        console.log('[Boot] Alphabet classifier preloaded.');
-      } else {
-        console.warn('[Boot] Alphabet classifier preload failed:', alphabetResult.reason);
-      }
-
-      if (wordResult.status === 'fulfilled') {
+      // Word recognition is the default Detect experience. Load and validate
+      // it before allowing the startup overlay to close.
+      try {
+        await globalClassifier.loadFSLModel();
         console.log('[Boot] Word SignClassifier preloaded.');
-      } else {
-        console.warn('[Boot] Word SignClassifier preload failed:', wordResult.reason);
+      } catch (error) {
+        wordModelFailed = true;
+        console.warn('[Boot] Word SignClassifier preload failed:', error);
       }
 
       if (!cancelled) {
-        const allFailed = results.every(result => result.status === 'rejected');
         setModelsLoaded(true);
-        setModelsFailed(allFailed);
+        setModelsFailed(wordModelFailed);
+      }
+
+      // Alphabet mode is optional at startup. Warm it only after the word
+      // model has finished so both TFLite loads do not compete for resources.
+      try {
+        await globalAlphabetImageClassifier.load();
+        console.log('[Boot] Alphabet classifier preloaded.');
+      } catch (error) {
+        console.warn('[Boot] Alphabet classifier preload failed:', error);
       }
     };
 
@@ -81,7 +81,7 @@ function BootLoadingOverlay() {
       status: avatarLoadError ? 'error' : isAvatarLoaded ? 'complete' : timedOut ? 'pending' : 'loading',
     },
     {
-      label: 'Recognition models',
+      label: 'Word recognition model',
       status: modelsFailed ? 'error' : modelsLoaded ? 'complete' : 'loading',
     },
     {

@@ -80,7 +80,6 @@ export default function ResultOverlay({ label, confidence, visible }: ResultOver
         >
             <View style={styles.content}>
                 <Text style={styles.category}>{renderLabel.category}</Text>
-                <Text style={styles.english}>{renderLabel.english}</Text>
                 <Text style={styles.filipino}>{renderLabel.filipino}</Text>
                 
                 <View style={styles.confidenceContainer}>
@@ -126,17 +125,10 @@ const styles = StyleSheet.create({
         letterSpacing: 2,
         marginBottom: 8,
     },
-    english: {
+    filipino: {
         color: '#2D3561',
         fontSize: 22,
         fontWeight: 'bold',
-        textAlign: 'center',
-        marginBottom: 4,
-    },
-    filipino: {
-        color: '#7A7A9D',
-        fontSize: 16,
-        fontWeight: '600',
         textAlign: 'center',
         marginBottom: 20,
     },

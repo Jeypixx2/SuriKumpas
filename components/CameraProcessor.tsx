@@ -42,7 +42,6 @@ export interface CameraPerformanceMetrics {
 export interface CameraProcessorRef {
     captureFrame: () => void;
     requestImageFrame: (requestId?: number, options?: { mirror?: boolean }) => void;
-    speak: (text: string, lang?: string) => void;
 }
 
 const MEDIAPIPE_SCRIPT = `
@@ -99,15 +98,6 @@ const MEDIAPIPE_SCRIPT = `
             }
         }
 
-        window.speakText = function(text, lang) {
-            if ('speechSynthesis' in window) {
-                const utterance = new SpeechSynthesisUtterance(text);
-                utterance.lang = lang || 'fil-PH';
-                utterance.rate = 1.1;
-                window.speechSynthesis.speak(utterance);
-            }
-        };
-        
         function r(n) { return Math.round(n * 10000) / 10000; }
 
         let latestHandBounds = null;
@@ -538,12 +528,6 @@ const CameraProcessor = forwardRef<CameraProcessorRef, CameraProcessorProps>(
                 const id = typeof requestId === 'number' ? requestId : Date.now();
                 const shouldMirror = options?.mirror === true ? 'true' : 'false';
                 webViewRef.current?.injectJavaScript(`window.captureAlphabetFrame(${id}, ${shouldMirror}); true;`);
-            },
-            speak: (text: string, lang: string = 'fil-PH') => {
-                if (!isWebViewReady) return;
-
-                const js = `window.speakText(${JSON.stringify(text)}, ${JSON.stringify(lang)}); true;`;
-                webViewRef.current?.injectJavaScript(js);
             }
         }), [isWebViewReady, onError]);
 

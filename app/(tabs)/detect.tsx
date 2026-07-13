@@ -3,6 +3,7 @@ import { StyleSheet, View, Text, TouchableOpacity, Animated, ActivityIndicator }
 import { useRouter } from 'expo-router';
 import { useIsFocused } from '@react-navigation/native';
 import { MaterialIcons } from '@expo/vector-icons';
+import * as Speech from 'expo-speech';
 import CameraProcessor, {
     CameraImageFrame,
     CameraPerformanceMetrics,
@@ -26,6 +27,40 @@ type WordInferencePolicy = {
     quickAcceptThreshold: number;
     marginThreshold: number;
 };
+
+let speechRequestId = 0;
+
+function stopDetectedSpeech(): void {
+    speechRequestId += 1;
+    void Speech.stop().catch(error => {
+        console.warn('[Detect] Could not stop speech:', error);
+    });
+}
+
+function speakDetectedPrediction(text: string): void {
+    const normalizedText = text.trim();
+    if (!normalizedText) return;
+
+    const requestId = ++speechRequestId;
+    void Speech.stop()
+        .then(() => {
+            // A newer detection may have arrived while the previous speech was
+            // stopping. Only the newest confirmed prediction should be spoken.
+            if (requestId !== speechRequestId) return;
+
+            Speech.speak(normalizedText, {
+                language: 'fil-PH',
+                rate: 0.85,
+                pitch: 1,
+                onError: error => {
+                    console.warn('[Detect] Text-to-speech error:', error);
+                },
+            });
+        })
+        .catch(error => {
+            console.warn('[Detect] Could not start speech:', error);
+        });
+}
 
 // Compact camera bridge payload aligned with the word model: Pose-LH-RH.
 // Pose: 0..131, LH: 132..194, RH: 195..257
@@ -89,6 +124,15 @@ const COMPLETED_WORD_INFERENCE_POLICY: WordInferencePolicy = {
 
 function normalizeLabelKey(value: string): string {
     return value.replace(/[_-]+/g, ' ').trim().toUpperCase();
+}
+
+function formatFilipinoResult(value: string): string {
+    return value
+        .trim()
+        .toLocaleLowerCase('fil-PH')
+        .replace(/(^|\s|-)([a-z])/g, (_, prefix: string, letter: string) =>
+            prefix + letter.toUpperCase()
+        );
 }
 
 function createWordDisplayLabel(label: string, labelIndex: number): FSLLabel {
@@ -234,7 +278,7 @@ export default function DetectScreen() {
     const cameraRef = useRef<CameraProcessorRef>(null);
     const isFocused = useIsFocused();
 
-    const [activeMode, setActiveMode] = useState<RecognitionMode>('alphabet');
+    const [activeMode, setActiveMode] = useState<RecognitionMode>('word');
     const [detectedLabel, setDetectedLabel] = useState<FSLLabel | null>(null);
     const [confidence, setConfidence] = useState(0);
     const [showResult, setShowResult] = useState(false);
@@ -243,7 +287,7 @@ export default function DetectScreen() {
     const [performanceInfo, setPerformanceInfo] = useState('');
     const [isMirrored, setIsMirrored] = useState(true);
     const [isAlphabetModelReady, setIsAlphabetModelReady] = useState(false);
-    const [isWordModelReady, setIsWordModelReady] = useState(false);
+    const [isWordModelReady, setIsWordModelReady] = useState(() => globalClassifier.isFSLModelLoaded());
     const [alphabetLoadError, setAlphabetLoadError] = useState<string | null>(null);
     const [wordLoadError, setWordLoadError] = useState<string | null>(null);
     const [isCameraReady, setIsCameraReady] = useState(false);
@@ -427,7 +471,9 @@ export default function DetectScreen() {
         const loadWordModel = async () => {
             try {
                 setWordLoadError(null);
-                setIsWordModelReady(false);
+                if (!signClassifierRef.current.isFSLModelLoaded()) {
+                    setIsWordModelReady(false);
+                }
                 await signClassifierRef.current.loadFSLModel();
                 const sequenceLength = signClassifierRef.current.getSequenceLength();
                 wordSequenceLengthRef.current = sequenceLength;
@@ -480,6 +526,7 @@ export default function DetectScreen() {
             if (resultHideTimeoutRef.current) {
                 clearTimeout(resultHideTimeoutRef.current);
             }
+            stopDetectedSpeech();
         };
     }, []);
 
@@ -584,7 +631,7 @@ export default function DetectScreen() {
                 setConfidence(result.confidence);
                 keepResultVisible(2000);
                 setStatus(`${result.label} (${(result.confidence * 100).toFixed(0)}%)`);
-                cameraRef.current?.speak(result.label, 'fil-PH');
+                speakDetectedPrediction(result.label);
                 lastDetectionRef.current = Date.now();
                 lastEmittedAlphabetLabelRef.current = result.label;
                 alphabetPredictionHistoryRef.current = [];
@@ -683,11 +730,15 @@ export default function DetectScreen() {
 
             if (shouldEmitPrediction && stablePrediction) {
                 const displayLabel = createWordDisplayLabel(stablePrediction.label, stablePrediction.labelIndex);
-                setDetectedLabel(displayLabel);
+                const filipinoText = formatFilipinoResult(displayLabel.filipino || displayLabel.english);
+                setDetectedLabel({
+                    ...displayLabel,
+                    filipino: filipinoText,
+                });
                 setConfidence(stablePrediction.confidence);
                 keepResultVisible(WORD_RESULT_VISIBLE_MS);
-                setStatus(`${displayLabel.english} (${(stablePrediction.confidence * 100).toFixed(0)}%)`);
-                cameraRef.current?.speak(displayLabel.filipino || displayLabel.english, 'fil-PH');
+                setStatus(`${filipinoText} (${(stablePrediction.confidence * 100).toFixed(0)}%)`);
+                speakDetectedPrediction(filipinoText);
                 lastEmittedWordLabelRef.current = stablePrediction.label;
                 wordResultLockedRef.current = true;
                 wordResultLockFrameCountRef.current = 0;

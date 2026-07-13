@@ -9,7 +9,7 @@ export const FSL_LABELS: FSLLabel[] = [
     { id: 0, english: "GOOD MORNING", filipino: "MAGANDANG UMAGA", category: "GREETING" },
     { id: 1, english: "GOOD EVENING", filipino: "MAGANDANG GABI", category: "GREETING" },
     { id: 2, english: "GOOD NIGHT", filipino: "MAGANDANG GABI POH", category: "GREETING" },
-    { id: 3, english: "HELLO", filipino: "HALO", category: "GREETING" },
+    { id: 3, english: "HELLO", filipino: "HELLO", category: "GREETING" },
     { id: 4, english: "HOW ARE YOU", filipino: "KUMUSTA KA", category: "GREETING" },
     { id: 5, english: "IM FINE", filipino: "MABUTI", category: "GREETING" },
     { id: 6, english: "NICE TO MEET YOU", filipino: "MASAYA AKONG MAKILALA KA", category: "GREETING" },
