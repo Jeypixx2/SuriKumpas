@@ -132,7 +132,22 @@ const MEDIAPIPE_SCRIPT = `
                 maxY = Math.max(maxY, lm.y);
             });
 
-            latestHandBounds = { minX, minY, maxX, maxY, seenAt: Date.now() };
+            const now = Date.now();
+            const nextBounds = { minX, minY, maxX, maxY, seenAt: now };
+            if (latestHandBounds && now - latestHandBounds.seenAt < 500) {
+                // Stabilize the crop across frames. A jumping crop changes hand
+                // scale and background even while the signer holds one letter.
+                const alpha = 0.35;
+                latestHandBounds = {
+                    minX: latestHandBounds.minX + (nextBounds.minX - latestHandBounds.minX) * alpha,
+                    minY: latestHandBounds.minY + (nextBounds.minY - latestHandBounds.minY) * alpha,
+                    maxX: latestHandBounds.maxX + (nextBounds.maxX - latestHandBounds.maxX) * alpha,
+                    maxY: latestHandBounds.maxY + (nextBounds.maxY - latestHandBounds.maxY) * alpha,
+                    seenAt: now
+                };
+            } else {
+                latestHandBounds = nextBounds;
+            }
         }
 
         function bytesToBase64(bytes) {

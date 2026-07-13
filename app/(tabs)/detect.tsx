@@ -91,16 +91,16 @@ const WORD_RESULT_VISIBLE_MS = 2000;
 const WORD_DEBUG_LOG_INTERVAL = 15;
 const WORD_INFERENCE_LOG_INTERVAL = 10;
 
-const ALPHABET_CONFIDENCE_THRESHOLD = 0.55;
-const ALPHABET_QUICK_ACCEPT_THRESHOLD = 0.82;
-const ALPHABET_MARGIN_THRESHOLD = 0.12;
-const ALPHABET_CONFIRMATION_COUNT = 2;
-const ALPHABET_HISTORY_LIMIT = 3;
-const CONFUSABLE_ALPHABET_LABELS = new Set(['N', 'T']);
-const CONFUSABLE_ALPHABET_CONFIDENCE_THRESHOLD = 0.72;
-const CONFUSABLE_ALPHABET_QUICK_ACCEPT_THRESHOLD = 0.94;
-const CONFUSABLE_ALPHABET_MARGIN_THRESHOLD = 0.22;
-const CONFUSABLE_ALPHABET_CONFIRMATION_COUNT = 3;
+const ALPHABET_CONFIDENCE_THRESHOLD = 0.62;
+const ALPHABET_QUICK_ACCEPT_THRESHOLD = 0.95;
+const ALPHABET_MARGIN_THRESHOLD = 0.18;
+const ALPHABET_CONFIRMATION_COUNT = 3;
+const ALPHABET_HISTORY_LIMIT = 5;
+const CONFUSABLE_ALPHABET_LABELS = new Set(['M', 'N', 'S', 'T']);
+const CONFUSABLE_ALPHABET_CONFIDENCE_THRESHOLD = 0.75;
+const CONFUSABLE_ALPHABET_QUICK_ACCEPT_THRESHOLD = 0.97;
+const CONFUSABLE_ALPHABET_MARGIN_THRESHOLD = 0.25;
+const CONFUSABLE_ALPHABET_CONFIRMATION_COUNT = 4;
 const ALPHABET_INFERENCE_INTERVAL_MS = 180;
 const ALPHABET_FRAME_TIMEOUT_MS = 800;
 const DETECTION_COOLDOWN_MS = 500;
@@ -608,11 +608,12 @@ export default function DetectScreen() {
                 }
             }
 
-            const repeatedLetterCount = isQuickAccept
-                ? requiredRepeatCount
-                : alphabetPredictionHistoryRef.current.filter(letter => letter === result.label).length;
+            const recentPredictions = alphabetPredictionHistoryRef.current.slice(-requiredRepeatCount);
+            const hasConsecutiveConfirmation =
+                recentPredictions.length === requiredRepeatCount &&
+                recentPredictions.every(letter => letter === result.label);
 
-            if (isQuickAccept || repeatedLetterCount >= requiredRepeatCount) {
+            if (isQuickAccept || hasConsecutiveConfirmation) {
                 // Continue checking frames so a different letter is recognized
                 // immediately, but do not repeatedly announce the held letter.
                 if (result.label === lastEmittedAlphabetLabelRef.current) {

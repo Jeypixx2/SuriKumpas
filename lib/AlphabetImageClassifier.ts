@@ -38,6 +38,15 @@ export class AlphabetImageClassifier {
     private labels: string[] = [];
     private loadPromise: Promise<void> | null = null;
 
+    private getCachedAssetFilename(asset: Asset, filename: string): string {
+        if (!asset.hash) return filename;
+
+        const extensionIndex = filename.lastIndexOf('.');
+        if (extensionIndex <= 0) return `${filename}-${asset.hash}`;
+
+        return `${filename.slice(0, extensionIndex)}-${asset.hash}${filename.slice(extensionIndex)}`;
+    }
+
     async load(): Promise<void> {
         if (this.model && this.labels.length > 0) return;
 
@@ -121,9 +130,14 @@ export class AlphabetImageClassifier {
             throw new Error('No writable directory is available for bundled assets.');
         }
 
-        const destination = baseDir + filename;
+        // Include the bundled asset hash so an updated model or labels file can
+        // never reuse a stale cache entry left by an older app installation.
+        const destination = baseDir + this.getCachedAssetFilename(asset, filename);
         const info = await FileSystem.getInfoAsync(destination);
-        if (!info.exists) {
+        if (info.exists && !asset.hash) {
+            await FileSystem.deleteAsync(destination, { idempotent: true });
+        }
+        if (!info.exists || !asset.hash) {
             await FileSystem.downloadAsync(asset.uri, destination);
         }
         return destination;
