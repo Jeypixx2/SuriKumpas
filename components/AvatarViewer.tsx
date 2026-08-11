@@ -1,6 +1,6 @@
 import { Buffer } from 'buffer';
 
-const AVATAR_DEBUG = false;
+const AVATAR_DEBUG = true;
 const debugLog = (...args: unknown[]) => {
     if (AVATAR_DEBUG) console.log(...args);
 };
@@ -47,10 +47,10 @@ import { VRM, VRMUtils, VRMLoaderPlugin } from '@pixiv/three-vrm';
 import { AvatarAnimator } from '../lib/AvatarAnimator';
 import { SequenceItem } from '../lib/labels';
 
-const AVATAR_TARGET_FRAME_MS = 33;
-const ACTIVE_SIGN_PRELOAD_DELAY_MS = 900;
-const INACTIVE_SIGN_PRELOAD_DELAY_MS = 9000;
-const BACKGROUND_PRELOAD_GAP_MS = 450;
+const AVATAR_TARGET_FRAME_MS = 16;
+const ACTIVE_SIGN_PRELOAD_DELAY_MS = 100;
+const INACTIVE_SIGN_PRELOAD_DELAY_MS = 1000;
+const BACKGROUND_PRELOAD_GAP_MS = 250;
 
 const glbArrayBufferCache = new Map<any, Promise<ArrayBuffer>>();
 const animationClipCache = new Map<any, Promise<THREE.AnimationClip | null>>();
@@ -137,58 +137,69 @@ const getAnimationClip = (assetFile: any): Promise<THREE.AnimationClip | null> =
 };
 
 const CUSTOM_ANIMATIONS: Record<string, any> = {
-    'GOOD MORNING': require('../assets/good_morning.glb'),
-    'GOOD EVENING': require('../assets/good_evening.glb'),
-    'GOOD AFTER NOON': require('../assets/good_afternoon.glb'),
-    'GOOD AFTERNOON': require('../assets/good_afternoon.glb'),
-    'MAGANDANG UMAGA': require('../assets/good_morning.glb'),
-    'MAGANDANG GABI': require('../assets/good_evening.glb'),
-    'MAGANDANG HAPON': require('../assets/good_afternoon.glb'),
+    // Greetings & Phrases
+    'GOOD MORNING': require('../assets/magandang_umaga.glb'),
+    'MAGANDANG UMAGA': require('../assets/magandang_umaga.glb'),
+    'MAGANDA UMAGA': require('../assets/magandang_umaga.glb'),
+    'GOOD EVENING': require('../assets/magandang_gabi.glb'),
+    'GOOD NIGHT': require('../assets/magandang_gabi.glb'),
+    'MAGANDANG GABI': require('../assets/magandang_gabi.glb'),
+    'MAGANDANG GABI POH': require('../assets/magandang_gabi.glb'),
+    'MAGANDA GABI': require('../assets/magandang_gabi.glb'),
+    'GOOD AFTERNOON': require('../assets/magandang_hapon.glb'),
+    'GOOD AFTER NOON': require('../assets/magandang_hapon.glb'),
+    'MAGANDANG HAPON': require('../assets/magandang_hapon.glb'),
+    'MAGANDA HAPON': require('../assets/magandang_hapon.glb'),
+    'KUMUSTA': require('../assets/kamusta_ka.glb'),
+    'KAMUSTA': require('../assets/kamusta_ka.glb'),
     'HELLO': require('../assets/hello.glb'),
-    'HOW ARE YOU': require('../assets/how_are_you.glb'),
-    'KUMUSTA KA': require('../assets/how_are_you.glb'),
-    'AUNTIE': require('../assets/auntie.glb'),
-    'TITA': require('../assets/auntie.glb'),
-    'IM FINE': require('../assets/im_fine.glb'),
-    "I'M FINE": require('../assets/im_fine.glb'),
-    'MABUTI': require('../assets/im_fine.glb'),
-    'THANK YOU': require('../assets/thank_you.glb'),
-    'SALAMAT': require('../assets/thank_you.glb'),
-    'SEE YOU TOMORROW': require('../assets/see_you_tommorow.glb'),
-    'SEE YOU TOMMOROW': require('../assets/see_you_tommorow.glb'),
-    'KITA TAYO BUKAS': require('../assets/see_you_tommorow.glb'),
-    "DON'T UNDERSTAND": require('../assets/dont_understand.glb'),
-    'DONT UNDERSTAND': require('../assets/dont_understand.glb'),
-    'HINDI NAINTINDIHAN': require('../assets/dont_understand.glb'),
-    "DON'T KNOW": require('../assets/dont_know.glb'),
-    'DONT KNOW': require('../assets/dont_know.glb'),
-    'HINDI ALAM': require('../assets/dont_know.glb'),
-    'KNOW': require('../assets/know.glb'),
-    'ALAM': require('../assets/know.glb'),
-    'NO': require('../assets/no.glb'),
-    'HINDI': require('../assets/no.glb'),
-    'CORRECT': require('../assets/correct.glb'),
-    'TAMA': require('../assets/correct.glb'),
-    'SLOW': require('../assets/slow.glb'),
-    'MABAGAL': require('../assets/slow.glb'),
-    'FAST': require('../assets/fast.glb'),
-    'MABILIS': require('../assets/fast.glb'),
-    'FOUR': require('../assets/four.glb'),
-    'APAT': require('../assets/four.glb'),
-    'FIVE': require('../assets/five.glb'),
-    'LIMA': require('../assets/five.glb'),
-    'SIX': require('../assets/six.glb'),
-    'ANIM': require('../assets/six.glb'),
-    'SEVEN': require('../assets/seven.glb'),
-    'PITO': require('../assets/seven.glb'),
-    'EIGHT': require('../assets/eight.glb'),
-    'WALO': require('../assets/eight.glb'),
-    'NINE': require('../assets/nine.glb'),
-    'SIYAM': require('../assets/nine.glb'),
+    'HOW ARE YOU': require('../assets/kamusta_ka.glb'),
+    'KUMUSTA KA': require('../assets/kamusta_ka.glb'),
+    'KAMUSTA KA': require('../assets/kamusta_ka.glb'),
+    'IM FINE': require('../assets/mabuti_naman_ako.glb'),
+    "I'M FINE": require('../assets/mabuti_naman_ako.glb'),
+    'I AM FINE': require('../assets/mabuti_naman_ako.glb'),
+    'MABUTI': require('../assets/mabuti_naman_ako.glb'),
+    'MABUTI NAMAN AKO': require('../assets/mabuti_naman_ako.glb'),
+    'SEE YOU TOMORROW': require('../assets/kita_tayo_bukas.glb'),
+    'KITA TAYO BUKAS': require('../assets/kita_tayo_bukas.glb'),
+    'NICE TO MEET YOU': require('../assets/ikinaggalak_kitang_makilala.glb'),
+    'MASAYA AKONG MAKILALA KA': require('../assets/ikinaggalak_kitang_makilala.glb'),
+    'IKINAGAGALAK KITANG MAKILALA': require('../assets/ikinaggalak_kitang_makilala.glb'),
+    "YOU'RE WELCOME": require('../assets/walang_anuman.glb'),
+    'YOURE WELCOME': require('../assets/walang_anuman.glb'),
+    'WALANG ANUMAN': require('../assets/walang_anuman.glb'),
+    'WHAT IS YOUR NAME': require('../assets/ano_ang_pangalan_mo.glb'),
+    'ANO ANG PANGALAN MO': require('../assets/ano_ang_pangalan_mo.glb'),
+    'SORRY': require('../assets/paumanhin.glb'),
+    'PAUMANHIN': require('../assets/paumanhin.glb'),
+    'PLEASE': require('../assets/pakiusap.glb'),
+    'PAKIUSAP': require('../assets/pakiusap.glb'),
+
+    // Responses & Survival
+    "DON'T UNDERSTAND": require('../assets/hindi_ko_maintindihan.glb'),
+    'DONT UNDERSTAND': require('../assets/hindi_ko_maintindihan.glb'),
+    'HINDI NAINTINDIHAN': require('../assets/hindi_ko_maintindihan.glb'),
+    'HINDI KO MAINTINDIHAN': require('../assets/hindi_ko_maintindihan.glb'),
+    "DON'T KNOW": require('../assets/hindi_ko_alam.glb'),
+    'DONT KNOW': require('../assets/hindi_ko_alam.glb'),
+    'HINDI ALAM': require('../assets/hindi_ko_alam.glb'),
+    'HINDI KO ALAM': require('../assets/hindi_ko_alam.glb'),
+    'KNOW': require('../assets/alam.glb'),
+    'ALAM': require('../assets/alam.glb'),
+    'NO': require('../assets/hindi.glb'),
+    'HINDI': require('../assets/hindi.glb'),
+    'YES': require('../assets/oo.glb'),
+    'OO': require('../assets/oo.glb'),
+
+    // Calendar & Days
+    'TODAY': require('../assets/ngayong_araw.glb'),
+    'NGAYON': require('../assets/ngayong_araw.glb'),
+    'NGAYONG ARAW': require('../assets/ngayong_araw.glb'),
+    'TOMORROW': require('../assets/bukas.glb'),
+    'BUKAS': require('../assets/bukas.glb'),
     'JANUARY': require('../assets/january.glb'),
     'ENERO': require('../assets/january.glb'),
-    'FEBRUARY': require('../assets/february.glb'),
-    'PEBRERO': require('../assets/february.glb'),
     'MARCH': require('../assets/march.glb'),
     'MARSO': require('../assets/march.glb'),
     'APRIL': require('../assets/april.glb'),
@@ -209,99 +220,33 @@ const CUSTOM_ANIMATIONS: Record<string, any> = {
     'NOBYEMBRE': require('../assets/november.glb'),
     'DECEMBER': require('../assets/december.glb'),
     'DISYEMBRE': require('../assets/december.glb'),
-    'MONDAY': require('../assets/monday.glb'),
-    'LUNES': require('../assets/monday.glb'),
-    'FRIDAY': require('../assets/friday.glb'),
-    'BIYERNES': require('../assets/friday.glb'),
-    'SATURDAY': require('../assets/saturday.glb'),
-    'SABADO': require('../assets/saturday.glb'),
-    'SUNDAY': require('../assets/sunday.glb'),
-    'LINGGO': require('../assets/sunday.glb'),
-    'FATHER': require('../assets/father.glb'),
-    'AMA': require('../assets/father.glb'),
-    'MOTHER': require('../assets/mother.glb'),
-    'INA': require('../assets/mother.glb'),
-    'SON': require('../assets/son.glb'),
-    'ANAK NA LALAKI': require('../assets/son.glb'),
-    'DAUGHTER': require('../assets/daughter.glb'),
-    'ANAK NA BABAE': require('../assets/daughter.glb'),
-    'GRANDFATHER': require('../assets/grandfather.glb'),
-    'LOLO': require('../assets/grandfather.glb'),
-    'GRANDMOTHER': require('../assets/grandmother.glb'),
-    'LOLA': require('../assets/grandmother.glb'),
-    'COUSIN': require('../assets/cousin.glb'),
-    'PINSAN': require('../assets/cousin.glb'),
-    'PARENTS': require('../assets/parents.glb'),
-    'MAGULANG': require('../assets/parents.glb'),
-    'BOY': require('../assets/boy.glb'),
-    'LALAKI': require('../assets/boy.glb'),
-    'GIRL': require('../assets/girl.glb'),
-    'BATA': require('../assets/girl.glb'),
-    'MAN': require('../assets/man.glb'),
-    'DEAF': require('../assets/deaf.glb'),
-    'BINGI': require('../assets/deaf.glb'),
-    'HARD OF HEARING': require('../assets/hard_of_hearing.glb'),
-    'MAHINA PANDINIG': require('../assets/hard_of_hearing.glb'),
-    'BLIND': require('../assets/blind.glb'),
-    'BULAG': require('../assets/blind.glb'),
-    'DEAF BLIND': require('../assets/deaf_blind.glb'),
-    'BINGI-BULAG': require('../assets/deaf_blind.glb'),
-    'MARRIED': require('../assets/married.glb'),
-    'KASAL': require('../assets/married.glb'),
-    'BLUE': require('../assets/blue.glb'),
-    'ASUL': require('../assets/blue.glb'),
-    'GREEN': require('../assets/green.glb'),
-    'BERDE': require('../assets/green.glb'),
-    'RED': require('../assets/red.glb'),
-    'PULA': require('../assets/red.glb'),
-    'BROWN': require('../assets/brown.glb'),
-    'KAYUMANGGI': require('../assets/brown.glb'),
-    'BLACK': require('../assets/black.glb'),
-    'ITIM': require('../assets/black.glb'),
-    'ORANGE': require('../assets/orange.glb'),
-    'KAHEL': require('../assets/orange.glb'),
-    'GRAY': require('../assets/gray.glb'),
-    'ABO': require('../assets/gray.glb'),
-    'LIGHT': require('../assets/light.glb'),
-    'MALIWANAG': require('../assets/light.glb'),
-    'DARK': require('../assets/dark.glb'),
-    'MADILIM': require('../assets/dark.glb'),
-    'BREAD': require('../assets/bread.glb'),
-    'TINAPAY': require('../assets/bread.glb'),
-    'EGG': require('../assets/egg.glb'),
-    'ITLOG': require('../assets/egg.glb'),
-    'FISH': require('../assets/fish.glb'),
-    'ISDA': require('../assets/fish.glb'),
-    'MEAT': require('../assets/meat.glb'),
-    'KARNE': require('../assets/meat.glb'),
-    'CHICKEN': require('../assets/chicken.glb'),
-    'MANOK': require('../assets/chicken.glb'),
-    'SPAGHETTI': require('../assets/spaghetti.glb'),
-    'ISPAGETI': require('../assets/spaghetti.glb'),
-    'RICE': require('../assets/rice.glb'),
-    'KANIN': require('../assets/rice.glb'),
-    'LONGANISA': require('../assets/longanisa.glb'),
-    'LONGGANISA': require('../assets/longanisa.glb'),
-    'SHRIMP': require('../assets/shrimp.glb'),
-    'HIPON': require('../assets/shrimp.glb'),
-    'CRAB': require('../assets/crab.glb'),
-    'ALIMANGO': require('../assets/crab.glb'),
-    'HOT': require('../assets/hot.glb'),
-    'MAINIT': require('../assets/hot.glb'),
-    'COLD': require('../assets/cold.glb'),
-    'MALAMIG': require('../assets/cold.glb'),
-    'JUICE': require('../assets/juice.glb'),
-    'INUMIN': require('../assets/juice.glb'),
-    'COFFEE': require('../assets/coffee.glb'),
-    'KAPE': require('../assets/coffee.glb'),
-    'BEER': require('../assets/beer.glb'),
-    'BIRA': require('../assets/beer.glb'),
-    'MILK': require('../assets/milk.glb'),
-    'GATAS': require('../assets/milk.glb'),
-    'SUGAR': require('../assets/sugar.glb'),
-    'ASUKAL': require('../assets/sugar.glb'),
-    'NO SUGAR': require('../assets/no_sugar.glb'),
-    'WALANG ASUKAL': require('../assets/no_sugar.glb'),
+
+    // Numbers
+    'FOUR': require('../assets/four.glb'),
+    'APAT': require('../assets/four.glb'),
+    'FIVE': require('../assets/five.glb'),
+    'LIMA': require('../assets/five.glb'),
+    'SIX': require('../assets/six.glb'),
+    'ANIM': require('../assets/six.glb'),
+    'SEVEN': require('../assets/seven.glb'),
+    'PITO': require('../assets/seven.glb'),
+    'EIGHT': require('../assets/eight.glb'),
+    'WALO': require('../assets/eight.glb'),
+    'NINE': require('../assets/nine.glb'),
+    'SIYAM': require('../assets/nine.glb'),
+
+    // People & Relationships
+    'BOY': require('../assets/lalake.glb'),
+    'MAN': require('../assets/lalake.glb'),
+    'LALAKI': require('../assets/lalake.glb'),
+    'LALAKE': require('../assets/lalake.glb'),
+    'WOMAN': require('../assets/babae.glb'),
+    'GIRL': require('../assets/babae.glb'),
+    'BABAE': require('../assets/babae.glb'),
+    'BATA': require('../assets/babae.glb'),
+    'HARD OF HEARING': require('../assets/mahina_ang_pandinig.glb'),
+    'MAHINA PANDINIG': require('../assets/mahina_ang_pandinig.glb'),
+    'MAHINA ANG PANDINIG': require('../assets/mahina_ang_pandinig.glb'),
 };
 
 const CUSTOM_LETTERS: Record<string, any> = {
@@ -335,20 +280,17 @@ const CUSTOM_LETTERS: Record<string, any> = {
 
 const PRIORITY_SIGN_PRELOADS = [
     'HELLO',
-    'THANK YOU',
     'GOOD MORNING',
     'GOOD AFTERNOON',
     'GOOD EVENING',
     'HOW ARE YOU',
+    'KAMUSTA KA',
+    'ANO ANG PANGALAN MO',
     'IM FINE',
     "DON'T KNOW",
     "DON'T UNDERSTAND",
     'KNOW',
     'NO',
-    'CORRECT',
-    'FAST',
-    'FATHER',
-    'MOTHER',
 ];
 
 // Apply Polyfills for all Three.js Loaders to intercept and prevent native execution hangs
@@ -692,10 +634,14 @@ export default function AvatarViewer({
         if (existingLoad) return existingLoad;
 
         const assetFile = isLetter ? CUSTOM_LETTERS[normalizedKeyword] : CUSTOM_ANIMATIONS[normalizedKeyword];
-        if (!assetFile) return;
+        if (!assetFile) {
+            console.warn(`[Avatar] ensureAnimationLoaded: No asset file for key="${normalizedKeyword}" isLetter=${isLetter}`);
+            return;
+        }
 
         const loadPromise = (async () => {
             try {
+                console.log(`[Avatar] Loading animation for: "${normalizedKeyword}"`);
                 const clip = await getAnimationClip(assetFile);
                 if (clip) {
                     if (animatorRef.current !== animator) return;
@@ -704,11 +650,21 @@ export default function AvatarViewer({
                         animator.setCustomLetterAnimation(normalizedKeyword, animatorClip);
                     } else {
                         animator.setCustomSignAnimation(normalizedKeyword, animatorClip);
+                        // Register under all keys in CUSTOM_ANIMATIONS that point to the SAME assetFile
+                        for (const [key, file] of Object.entries(CUSTOM_ANIMATIONS)) {
+                            if (file === assetFile && key !== normalizedKeyword) {
+                                animator.setCustomSignAnimation(key, animatorClip.clone());
+                                loadedAnimationsRef.current.add(`sign_${key}`);
+                            }
+                        }
                     }
                     loadedAnimationsRef.current.add(cacheKey);
+                    console.log(`[Avatar] Animation loaded OK for: "${normalizedKeyword}"`);
+                } else {
+                    console.error(`[Avatar] getAnimationClip returned NULL for: "${normalizedKeyword}" — this will cause fingerspelling!`);
                 }
             } catch (err) {
-                console.warn(`[Avatar] Lazy load failed for ${keyword}:`, err);
+                console.error(`[Avatar] Lazy load FAILED for "${keyword}":`, err);
             } finally {
                 animationLoadPromisesRef.current.delete(cacheKey);
             }
@@ -719,13 +675,17 @@ export default function AvatarViewer({
     };
 
     const loadCustomSignAnimations = async (sequence: SequenceItem[], animator: AvatarAnimator) => {
-        const signs = Array.from(new Set(
-            sequence
-                .filter(item => item.type === 'sign' && CUSTOM_ANIMATIONS[item.value.toUpperCase()])
-                .map(item => item.value.toUpperCase())
-        ));
+        const signKeysToLoad = new Set<string>();
+        for (const item of sequence) {
+            if (item.type === 'sign') {
+                const val = item.value.toUpperCase();
+                const disp = item.display ? item.display.toUpperCase() : '';
+                if (CUSTOM_ANIMATIONS[val]) signKeysToLoad.add(val);
+                if (disp && CUSTOM_ANIMATIONS[disp]) signKeysToLoad.add(disp);
+            }
+        }
 
-        await Promise.all(signs.map(sign => ensureAnimationLoaded(sign, false, animator)));
+        await Promise.all(Array.from(signKeysToLoad).map(sign => ensureAnimationLoaded(sign, false, animator)));
     };
 
     const loadCustomLetterAnimations = async (sequence: SequenceItem[], animator: AvatarAnimator) => {

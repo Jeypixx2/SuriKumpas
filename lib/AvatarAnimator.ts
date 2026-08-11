@@ -32,6 +32,7 @@ export interface VRM {
 export interface SequenceItem {
     type: 'sign' | 'letter';
     value: string;
+    display?: string;
 }
 
 export class AvatarAnimator {
@@ -466,8 +467,16 @@ export class AvatarAnimator {
             const nodeName = trackParts[0];
             const propertyName = trackParts[1];
 
+            // Clean armature/namespace prefixes to support all GLB export formats
+            let cleanNodeName = nodeName;
+            if (cleanNodeName.includes(':')) cleanNodeName = cleanNodeName.split(':').pop()!;
+            if (cleanNodeName.includes('|')) cleanNodeName = cleanNodeName.split('|').pop()!;
+            if (cleanNodeName.includes('/')) cleanNodeName = cleanNodeName.split('/').pop()!;
+            cleanNodeName = cleanNodeName.replace(/^mixamorig\d*[_:]?/i, '');
+            cleanNodeName = cleanNodeName.replace(/^Armature[_:]?/i, '');
+
             // 1. Is this node known in our map?
-            let vrmBoneName = boneMap[nodeName];
+            let vrmBoneName = boneMap[nodeName] || boneMap[cleanNodeName];
 
             // 🚀 BONE DEFORMATION FIX: Blender exports position/scale tracks for all bones.
             const isHips = (vrmBoneName === 'hips') || (!vrmBoneName && nodeName.toLowerCase().includes('hip'));
@@ -905,17 +914,20 @@ export class AvatarAnimator {
         for (const item of sequence) {
             if (item.type === 'sign') {
                 const upperVal = item.value.toUpperCase();
+                const upperDisp = item.display ? item.display.toUpperCase() : '';
+
                 if (this.signAnimations.has(upperVal)) {
                     processedSequence.push({ ...item, value: upperVal });
+                } else if (upperDisp && this.signAnimations.has(upperDisp)) {
+                    processedSequence.push({ ...item, value: upperDisp });
                 } else {
-                    debugLog(`[AvatarAnimator] Sign "${item.value}" not found in custom animations. Fingerspelling fallback.`);
-                    for (const char of upperVal) {
-                        if (char >= 'A' && char <= 'Z') {
-                            processedSequence.push({
-                                type: 'letter',
-                                value: char
-                            });
-                        }
+                    debugLog(`[AvatarAnimator] Sign "${item.value}" / "${item.display}" not found in custom animations. Fingerspelling fallback.`);
+                    const textToSpell = (upperDisp || upperVal).replace(/[^A-Z]/g, '');
+                    for (const char of textToSpell) {
+                        processedSequence.push({
+                            type: 'letter',
+                            value: char
+                        });
                     }
                 }
             } else {

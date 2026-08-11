@@ -10,7 +10,7 @@ export const FSL_LABELS: FSLLabel[] = [
     { id: 1, english: "GOOD EVENING", filipino: "MAGANDANG GABI", category: "GREETING" },
     { id: 2, english: "GOOD NIGHT", filipino: "MAGANDANG GABI POH", category: "GREETING" },
     { id: 3, english: "HELLO", filipino: "HELLO", category: "GREETING" },
-    { id: 4, english: "HOW ARE YOU", filipino: "KUMUSTA KA", category: "GREETING" },
+    { id: 4, english: "HOW ARE YOU", filipino: "KAMUSTA KA", category: "GREETING" },
     { id: 5, english: "IM FINE", filipino: "MABUTI", category: "GREETING" },
     { id: 6, english: "NICE TO MEET YOU", filipino: "MASAYA AKONG MAKILALA KA", category: "GREETING" },
     { id: 7, english: "THANK YOU", filipino: "SALAMAT", category: "GREETING" },
@@ -106,12 +106,25 @@ export const FSL_LABELS: FSLLabel[] = [
     { id: 97, english: "JUICE", filipino: "INUMIN", category: "DRINK" },
     { id: 98, english: "MILK", filipino: "GATAS", category: "DRINK" },
     { id: 99, english: "COFFEE", filipino: "KAPE", category: "DRINK" },
-    { id: 100, "english": "TEA", filipino: "TSAA", category: "DRINK" },
-    { id: 101, "english": "BEER", filipino: "BIRA", category: "DRINK" },
-    { id: 102, "english": "WINE", filipino: "ALAK", category: "DRINK" },
-    { id: 103, "english": "SUGAR", filipino: "ASUKAL", category: "DRINK" },
-    { id: 104, "english": "NO SUGAR", filipino: "WALANG ASUKAL", category: "DRINK" },
+    { id: 100, english: "TEA", filipino: "TSAA", category: "DRINK" },
+    { id: 101, english: "BEER", filipino: "BIRA", category: "DRINK" },
+    { id: 102, english: "WINE", filipino: "ALAK", category: "DRINK" },
+    { id: 103, english: "SUGAR", filipino: "ASUKAL", category: "DRINK" },
+    { id: 104, english: "NO SUGAR", filipino: "WALANG ASUKAL", category: "DRINK" },
     { id: 105, english: "GOOD AFTERNOON", filipino: "MAGANDANG HAPON", category: "GREETING" },
+    { id: 106, english: "WHAT IS YOUR NAME", filipino: "ANO ANG PANGALAN MO", category: "GREETING" },
+    { id: 107, english: "I AM FINE", filipino: "MABUTI NAMAN AKO", category: "GREETING" },
+    { id: 108, english: "SORRY", filipino: "PAUMANHIN", category: "GREETING" },
+    { id: 109, english: "PLEASE", filipino: "PAKIUSAP", category: "SURVIVAL" },
+    { id: 110, english: "NICE TO MEET YOU", filipino: "IKINAGAGALAK KITANG MAKILALA", category: "GREETING" },
+    { id: 111, english: "DON'T KNOW", filipino: "HINDI KO ALAM", category: "SURVIVAL" },
+    { id: 112, english: "DON'T UNDERSTAND", filipino: "HINDI KO MAINTINDIHAN", category: "SURVIVAL" },
+    { id: 113, english: "HARD OF HEARING", filipino: "MAHINA ANG PANDINIG", category: "RELATIONSHIPS" },
+    { id: 114, english: "TODAY", filipino: "NGAYONG ARAW", category: "DAYS" },
+    // Extra aliases so Filipino phrases are directly findable:
+    { id: 115, english: "GOOD MORNING", filipino: "MAGANDANG UMAGA", category: "GREETING" },
+    { id: 116, english: "HOW ARE YOU", filipino: "KAMUSTA KA", category: "GREETING" },
+    { id: 117, english: "I AM FINE", filipino: "MABUTI NAMAN", category: "GREETING" },
 ];
 
 export const VISIBLE_FSL_LABELS: FSLLabel[] = FSL_LABELS;
@@ -147,7 +160,7 @@ export function tokenizeSentence(sentence: string): SequenceItem[] {
     if (!normalized) return [];
 
     // 2. Strip punctuation that might interfere with word matching
-    normalized = normalized.replace(/[‘’]/g, "'");
+    normalized = normalized.replace(/['']/g, "'");
     normalized = normalized.replace(/[.,!?;:]/g, '');
 
     // 3. Handle common spelling/slang variations to ensure they match high-quality GLBs
@@ -156,20 +169,48 @@ export function tokenizeSentence(sentence: string): SequenceItem[] {
     normalized = normalized.replace(/\bDONT\b/g, "DON'T");
     normalized = normalized.replace(/\bDO\s+NOT\b/g, "DON'T");
     normalized = normalized.replace(/\bGOOD\s+AFTER\s+NOON\b/g, 'GOOD AFTERNOON');
-    // Specifically handle "KAMUSTA" -> "KUMUSTA KA"
-    normalized = normalized.replace(/\bKAMUSTA\b/g, 'KUMUSTA KA');
-    // Ensure "KUMUSTA" matches "KUMUSTA KA" if it's a standalone word
-    if (normalized === 'KUMUSTA') normalized = 'KUMUSTA KA';
 
-    let sequence: SequenceItem[] = [];
+    // Handle KAMUSTA/KUMUSTA — normalize to KAMUSTA KA (avoid double-KA)
+    normalized = normalized.replace(/\b(KAMUSTA|KUMUSTA)\s+KA\b/g, 'KAMUSTA KA');
+    normalized = normalized.replace(/\b(KAMUSTA|KUMUSTA)\b(?!\s+KA)/g, 'KAMUSTA KA');
+
+    // Handle partial/alternate MAGANDANG forms
+    normalized = normalized.replace(/\bMAGANDA\s+UMAGA\b/g, 'MAGANDANG UMAGA');
+    normalized = normalized.replace(/\bMAGANDA\s+GABI\b/g, 'MAGANDANG GABI');
+    normalized = normalized.replace(/\bMAGANDA\s+HAPON\b/g, 'MAGANDANG HAPON');
+
+    // Handle partial ANO ANG PANGALAN forms
+    normalized = normalized.replace(/\bANO\s+PANGALAN\s+MO\b/g, 'ANO ANG PANGALAN MO');
+    normalized = normalized.replace(/\bANO\s+ANG\s+PANGALAN\b(?!\s+MO)/g, 'ANO ANG PANGALAN MO');
+
+    // Other phrase normalizations
+    normalized = normalized.replace(/\bHINDI\s+MAINTINDIHAN\b/g, 'HINDI KO MAINTINDIHAN');
+    normalized = normalized.replace(/\bHINDI\s+ALAM\b/g, 'HINDI KO ALAM');
+    normalized = normalized.replace(/\bMAHINA\s+PANDINIG\b/g, 'MAHINA ANG PANDINIG');
+    normalized = normalized.replace(/\bMABUTI\s+NAMAN\b(?!\s+AKO)/g, 'MABUTI NAMAN AKO');
+
+    // Handle lone partial words that are clearly meant to be a full phrase
+    if (normalized === 'UMAGA' || normalized === 'MAGANDA' || normalized === 'MAGANDANG') {
+        normalized = 'MAGANDANG UMAGA';
+    }
+    if (normalized === 'GABI') normalized = 'MAGANDANG GABI';
+    if (normalized === 'HAPON') normalized = 'MAGANDANG HAPON';
+    if (normalized === 'MABUTI') normalized = 'MABUTI NAMAN AKO';
+    if (normalized === 'ANO ANG PANGALAN' || normalized === 'ANO PANGALAN MO') {
+        normalized = 'ANO ANG PANGALAN MO';
+    }
+
+    // Strip filler words
+    normalized = normalized.replace(/\b(PO|HO|POH)\b/g, '').replace(/\s+/g, ' ').trim();
+
+    const sequence: SequenceItem[] = [];
     const words = normalized.split(/\s+/).filter(w => w.length > 0);
 
     for (let i = 0; i < words.length; i++) {
         let matched = false;
 
-        // Greedy check: look ahead for multi-word phrases (e.g., "GOOD MORNING")
-        // We check up to 3 upcoming words for a match
-        for (let lookAhead = 2; lookAhead >= 0; lookAhead--) {
+        // Greedy check: look ahead for multi-word phrases (up to 5 words)
+        for (let lookAhead = 5; lookAhead >= 0; lookAhead--) {
             if (i + lookAhead >= words.length) continue;
 
             const candidatePhrase = words.slice(i, i + lookAhead + 1).join(' ');

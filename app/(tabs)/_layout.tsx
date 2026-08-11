@@ -101,8 +101,6 @@ function BootLoadingOverlay() {
 }
 
 function GlobalAvatar() {
-  const segments = useSegments();
-  const isTranslate = segments.includes('translate');
   const { 
     signToPlay, setSignToPlay,
     letterToPlay, setLetterToPlay,
@@ -126,19 +124,11 @@ function GlobalAvatar() {
     ));
   }, []);
 
-  const shouldShowAvatar = isTranslate;
-
-  useEffect(() => {
-    if (!isTranslate) {
-      setSequenceToPlay(null);
-      setSignToPlay(null);
-      setLetterToPlay(null);
-    }
-  }, [isTranslate, setSequenceToPlay, setSignToPlay, setLetterToPlay]);
+  const shouldShowAvatar = true;
 
   return (
     <View
-      pointerEvents={isTranslate ? 'auto' : 'none'}
+      pointerEvents="none"
       style={[
       styles.avatarContainer,
       {
@@ -170,7 +160,7 @@ function GlobalAvatar() {
          {dots}
       </View>
 
-      {isTranslate && !isAvatarLoaded && (
+      {!isAvatarLoaded && (
         <View style={styles.loadingOverlay}>
           <Text style={[styles.loadingText, avatarLoadError && styles.loadingErrorText]}>
             {avatarLoadError ? 'Avatar could not load' : 'Preparing avatar...'}
@@ -188,42 +178,10 @@ export default function TabLayout() {
         <Tabs 
           screenOptions={{ 
             headerShown: false, 
-            tabBarStyle: { 
-              backgroundColor: '#FFFFFF', 
-              borderTopColor: '#EEE8FF',
-              borderTopWidth: 1.5,
-              shadowColor: '#8080B0',
-              shadowOffset: { width: 0, height: -2 },
-              shadowOpacity: 0.08,
-              shadowRadius: 8,
-              elevation: 8,
-            }, 
-            tabBarActiveTintColor: '#5BC4B5', 
-            tabBarInactiveTintColor: '#B0B0C8',
-            lazy: true
+            tabBarStyle: { display: 'none' }
           }}
         >
-          <Tabs.Screen
-            name="index"
-            options={{
-              title: 'Home',
-              tabBarIcon: ({ color }) => <Ionicons name="home" size={24} color={color} />
-            }}
-          />
-          <Tabs.Screen
-            name="detect"
-            options={{
-              title: 'Detect',
-              tabBarIcon: ({ color }) => <Ionicons name="camera" size={24} color={color} />
-            }}
-          />
-          <Tabs.Screen
-            name="translate"
-            options={{
-              title: 'Translate',
-              tabBarIcon: ({ color }) => <Ionicons name="mic" size={24} color={color} />
-            }}
-          />
+          <Tabs.Screen name="index" />
         </Tabs>
         <GlobalAvatar />
         <BootLoadingOverlay />
@@ -238,7 +196,7 @@ const styles = StyleSheet.create({
         top: 0,
         left: 0,
         right: 0,
-        height: '45%',
+        height: '50%',
         backgroundColor: 'transparent',
         zIndex: 100,
     },
