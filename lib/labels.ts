@@ -125,6 +125,8 @@ export const FSL_LABELS: FSLLabel[] = [
     { id: 115, english: "GOOD MORNING", filipino: "MAGANDANG UMAGA", category: "GREETING" },
     { id: 116, english: "HOW ARE YOU", filipino: "KAMUSTA KA", category: "GREETING" },
     { id: 117, english: "I AM FINE", filipino: "MABUTI NAMAN", category: "GREETING" },
+    { id: 118, english: "HOW OLD ARE YOU", filipino: "ILANG TAON KA NA", category: "CONVERSATION" },
+    { id: 119, english: "WHERE DO YOU LIVE", filipino: "SAAN KA NAKATIRA", category: "CONVERSATION" },
 ];
 
 export const VISIBLE_FSL_LABELS: FSLLabel[] = FSL_LABELS;
