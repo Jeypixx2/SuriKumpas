@@ -251,6 +251,28 @@ const CUSTOM_ANIMATIONS: Record<string, any> = {
     'HARD OF HEARING': require('../assets/mahina_ang_pandinig.glb'),
     'MAHINA PANDINIG': require('../assets/mahina_ang_pandinig.glb'),
     'MAHINA ANG PANDINIG': require('../assets/mahina_ang_pandinig.glb'),
+
+    // Newly added GLBs
+    'GOODBYE': require('../assets/paalam.glb'),
+    'PAALAM': require('../assets/paalam.glb'),
+    'TAKE CARE': require('../assets/ingat.glb'),
+    'INGAT': require('../assets/ingat.glb'),
+    'WAIT': require('../assets/sandali.glb'),
+    'WAIT A MOMENT': require('../assets/sandali.glb'),
+    'SANDALI': require('../assets/sandali.glb'),
+    'WHY': require('../assets/bakit.glb'),
+    'BAKIT': require('../assets/bakit.glb'),
+    'HOW': require('../assets/paano.glb'),
+    'PAANO': require('../assets/paano.glb'),
+    'WHICH': require('../assets/alin.glb'),
+    'ALIN': require('../assets/alin.glb'),
+    'MY NAME IS': require('../assets/ang_pangalan_ko_ay.glb'),
+    'ANG PANGALAN KO AY': require('../assets/ang_pangalan_ko_ay.glb'),
+    "WHAT'S THE PROBLEM": require('../assets/anong_problema.glb'),
+    'WHATS THE PROBLEM': require('../assets/anong_problema.glb'),
+    'ANONG PROBLEMA': require('../assets/anong_problema.glb'),
+    'UNTIL WE MEET AGAIN': require('../assets/sa_muling_pagkikita.glb'),
+    'SA MULING PAGKIKITA': require('../assets/sa_muling_pagkikita.glb'),
 };
 
 const CUSTOM_LETTERS: Record<string, any> = {

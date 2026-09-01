@@ -127,6 +127,26 @@ export const FSL_LABELS: FSLLabel[] = [
     { id: 117, english: "I AM FINE", filipino: "MABUTI NAMAN", category: "GREETING" },
     { id: 118, english: "HOW OLD ARE YOU", filipino: "ILANG TAON KA NA", category: "CONVERSATION" },
     { id: 119, english: "WHERE DO YOU LIVE", filipino: "SAAN KA NAKATIRA", category: "CONVERSATION" },
+    { id: 120, english: "GOODBYE", filipino: "PAALAM", category: "GREETING" },
+    { id: 121, english: "TAKE CARE", filipino: "INGAT", category: "GREETING" },
+    { id: 122, english: "WAIT A MOMENT", filipino: "SANDALI", category: "SURVIVAL" },
+    { id: 123, english: "WHY", filipino: "BAKIT", category: "SURVIVAL" },
+    { id: 124, english: "HOW", filipino: "PAANO", category: "SURVIVAL" },
+    { id: 125, english: "WHICH", filipino: "ALIN", category: "SURVIVAL" },
+    { id: 126, english: "MY NAME IS", filipino: "ANG PANGALAN KO AY", category: "GREETING" },
+    { id: 127, english: "WHAT'S THE PROBLEM", filipino: "ANONG PROBLEMA", category: "SURVIVAL" },
+    { id: 128, english: "UNTIL WE MEET AGAIN", filipino: "SA MULING PAGKIKITA", category: "GREETING" },
+
+    // Tagalog direct labels for seamless matching:
+    { id: 129, english: "PAALAM", filipino: "PAALAM", category: "GREETING" },
+    { id: 130, english: "INGAT", filipino: "INGAT", category: "GREETING" },
+    { id: 131, english: "SANDALI", filipino: "SANDALI", category: "SURVIVAL" },
+    { id: 132, english: "BAKIT", filipino: "BAKIT", category: "SURVIVAL" },
+    { id: 133, english: "PAANO", filipino: "PAANO", category: "SURVIVAL" },
+    { id: 134, english: "ALIN", filipino: "ALIN", category: "SURVIVAL" },
+    { id: 135, english: "ANG PANGALAN KO AY", filipino: "ANG PANGALAN KO AY", category: "GREETING" },
+    { id: 136, english: "ANONG PROBLEMA", filipino: "ANONG PROBLEMA", category: "SURVIVAL" },
+    { id: 137, english: "SA MULING PAGKIKITA", filipino: "SA MULING PAGKIKITA", category: "GREETING" },
 ];
 
 export const VISIBLE_FSL_LABELS: FSLLabel[] = FSL_LABELS;
@@ -204,6 +224,16 @@ export function tokenizeSentence(sentence: string): SequenceItem[] {
 
     // Strip filler words
     normalized = normalized.replace(/\b(PO|HO|POH)\b/g, '').replace(/\s+/g, ' ').trim();
+
+    // Normalize new phrase variants
+    normalized = normalized.replace(/\bBYE\b/g, 'GOODBYE');
+    normalized = normalized.replace(/\bSANDALI\s+LANG\b/g, 'SANDALI');
+    normalized = normalized.replace(/\bWAIT\s+A\s+(MOMENT|WHILE|SEC|SECOND)\b/g, 'WAIT A MOMENT');
+    normalized = normalized.replace(/\bANO\s+PROBLEMA\b/g, 'ANONG PROBLEMA');
+    normalized = normalized.replace(/\bANG\s+PANGALAN\s+KO\b(?!\s+AY)/g, 'ANG PANGALAN KO AY');
+    normalized = normalized.replace(/\bMY\s+NAME\s+IS\b/g, 'MY NAME IS');
+    normalized = normalized.replace(/\bSA\s+MULING\s+PAGKIKITA\b/g, 'SA MULING PAGKIKITA');
+    normalized = normalized.replace(/\bUNTIL\s+WE\s+MEET\b(?!\s+AGAIN)/g, 'UNTIL WE MEET AGAIN');
 
     const sequence: SequenceItem[] = [];
     const words = normalized.split(/\s+/).filter(w => w.length > 0);
