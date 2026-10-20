@@ -8,7 +8,9 @@
     "ios": "npx expo run:ios",
     "web": "npx expo start --web",
     "clean": "rd /s /q .expo 2>nul & rd /s /q node_modules 2>nul & rd /s /q %TEMP%\\metro-* 2>nul & rd /s /q %TEMP%\\haste-map-* 2>nul & npm cache clean --force",
-    "clean-start": "npm run clean & npm install --legacy-peer-deps & npx expo start --clear"
+    "clean-start": "npm run clean & npm install --legacy-peer-deps & npx expo start --clear",
+    "build:apk": "powershell -Command \"Remove-Item -Recurse -Force 'android/app/build/generated/assets/createBundleReleaseJsAndAssets' -ErrorAction SilentlyContinue; .\\android\\gradlew.bat -p android assembleRelease\"",
+    "install:apk": "npm run build:apk && %LOCALAPPDATA%\\Android\\Sdk\\platform-tools\\adb.exe install -r android\\app\\build\\outputs\\apk\\release\\app-release.apk"
   },
   "dependencies": {
     "@dev-amirzubair/react-native-voice": "^1.0.4",
