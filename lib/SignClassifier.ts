@@ -1,4 +1,5 @@
 import { loadTensorflowModel, TensorflowModel } from 'react-native-fast-tflite';
+import { SignDetector } from './SignDetector';
 import { Asset } from 'expo-asset';
 import * as FileSystem from 'expo-file-system/legacy';
 import { Buffer } from 'buffer';
@@ -33,6 +34,9 @@ export class SignClassifier {
     private wordSequenceLength = DEFAULT_WORD_SEQUENCE_LENGTH;
     private wordInputShape: number[] = [];
     private inferenceLogCounter = 0;
+    private detector = new SignDetector();
+    private bufferedFrames: Float32Array[] = [];
+    private previousFrame: Float32Array | null = null;
 
     private getCachedAssetFilename(asset: Asset, filename: string): string {
         if (!asset.hash) return filename;
@@ -466,6 +470,43 @@ export class SignClassifier {
         return tensor.shape
             .map(dim => Number(dim))
             .filter(dim => Number.isFinite(dim));
+    }
+
+    /**
+     * Feed a new key‑point frame. The method buffers frames while a sign is active.
+     * When the detector signals that the sign has ended, it runs classification on
+     * the collected frames and returns the recognised word (label). If the sign has
+     * not finished yet, it returns `null`.
+     */
+    public async feedFrame(frame: Float32Array): Promise<string | null> {
+        // Update detector state and decide whether the sign just finished.
+        const completed = this.detector.feed(frame, this.previousFrame);
+        this.previousFrame = frame;
+
+        // Buffer frames while the detector is active.
+        if (this.detector.active) {
+            this.bufferedFrames.push(frame);
+            // Keep only the most recent `wordSequenceLength` frames.
+            if (this.bufferedFrames.length > this.wordSequenceLength) {
+                this.bufferedFrames.shift();
+            }
+        }
+
+        if (completed) {
+            // Ensure we have exactly `wordSequenceLength` frames.
+            const needed = this.wordSequenceLength;
+            const frames = this.bufferedFrames.slice(-needed);
+            while (frames.length < needed) {
+                // Pad with the first available frame (should rarely happen).
+                frames.unshift(frames[0] ?? new Float32Array(WORD_FRAME_SIZE));
+            }
+            // Run classification on the collected frames.
+            const pred = await this.classifyFSL(frames);
+            // Reset buffer for the next sign.
+            this.bufferedFrames = [];
+            return pred.label;
+        }
+        return null;
     }
 
     private getElementCount(shape: number[]): number {

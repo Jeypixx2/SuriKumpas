@@ -2,6 +2,7 @@ import React, { useRef, useEffect, useState, useCallback, forwardRef, useImperat
 import { StyleSheet, View, Text } from 'react-native';
 import { useCameraPermissions } from 'expo-camera';
 import { WebView } from 'react-native-webview';
+import { globalClassifier } from '../lib/SignClassifier';
 import * as FileSystem from 'expo-file-system/legacy';
 import { Buffer } from 'buffer';
 
@@ -12,6 +13,7 @@ const debugLog = (...args: unknown[]) => {
 
 interface CameraProcessorProps {
     onKeypointsExtracted?: (keypoints: Float32Array | 'hands-detected' | 'no-hands') => void;
+    onSignDetected?: (label: string) => void;
     onImageFrameCaptured?: (frame: CameraImageFrame) => void;
     onPerformance?: (metrics: CameraPerformanceMetrics) => void;
     onReady?: () => void;
@@ -529,6 +531,7 @@ const MEDIAPIPE_SCRIPT = `
 const CameraProcessor = forwardRef<CameraProcessorRef, CameraProcessorProps>(
     ({
         onKeypointsExtracted,
+        onSignDetected,
         onImageFrameCaptured,
         onPerformance,
         onReady,
@@ -633,7 +636,6 @@ const CameraProcessor = forwardRef<CameraProcessorRef, CameraProcessorProps>(
             try {
                 const message = JSON.parse(event.nativeEvent.data);
                 if (message.type === 'keypoints') {
-                    if (CAMERA_DEBUG && Math.random() < 0.05) debugLog(`[CameraProcessor] Received keypoints, length: ${message.data.length}`);
                     const keypoints = new Float32Array(message.data);
                     onKeypointsExtracted?.(keypoints);
                 } else if (message.type === 'word-keypoints-batch') {
@@ -642,8 +644,10 @@ const CameraProcessor = forwardRef<CameraProcessorRef, CameraProcessorProps>(
                         : undefined;
                     lastBridgeMsRef.current = bridgeMs;
                     for (const frame of message.frames || []) {
-                        const bytes = new Uint8Array(Buffer.from(frame.data, 'base64'));
-                        const keypoints = new Float32Array(bytes.buffer);
+                        const buf = Buffer.from(frame.data, 'base64');
+                        const ab = new ArrayBuffer(buf.length);
+                        new Uint8Array(ab).set(buf);
+                        const keypoints = new Float32Array(ab);
                         onKeypointsExtracted?.(keypoints);
                     }
                 } else if (message.type === 'no-hands-keypoints') {
@@ -703,7 +707,7 @@ const CameraProcessor = forwardRef<CameraProcessorRef, CameraProcessorProps>(
                 event.grant();
             }
         } as any;
-        
+
         if (!permission?.granted) {
             return (
                 <View style={[styles.container, styles.centered, style]}>
