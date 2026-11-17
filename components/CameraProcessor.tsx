@@ -13,24 +13,15 @@ const debugLog = (...args: unknown[]) => {
 
 interface CameraProcessorProps {
     onKeypointsExtracted?: (keypoints: Float32Array | 'hands-detected' | 'no-hands') => void;
+    onHandLandmarksExtracted?: (landmarks: Float32Array, timestamp: number) => void;
+    onNoHandDetected?: (timestamp: number) => void;
     onSignDetected?: (label: string) => void;
-    onImageFrameCaptured?: (frame: CameraImageFrame) => void;
     onPerformance?: (metrics: CameraPerformanceMetrics) => void;
     onReady?: () => void;
     onError?: (message: string) => void;
     style?: any;
     active?: boolean;
     recognitionMode?: 'alphabet' | 'word';
-}
-
-export interface CameraImageFrame {
-    requestId?: number;
-    width: number;
-    height: number;
-    rgb: Uint8Array;
-    channels: 3;
-    captureMs?: number;
-    bridgeMs?: number;
 }
 
 export interface CameraPerformanceMetrics {
@@ -43,7 +34,6 @@ export interface CameraPerformanceMetrics {
 
 export interface CameraProcessorRef {
     captureFrame: () => void;
-    requestImageFrame: (requestId?: number, options?: { mirror?: boolean }) => void;
 }
 
 const MEDIAPIPE_SCRIPT = `
@@ -105,53 +95,6 @@ const MEDIAPIPE_SCRIPT = `
 
         function r(n) { return Math.round(n * 10000) / 10000; }
 
-        let latestHandBounds = null;
-        let alphabetCanvas = null;
-        let alphabetCtx = null;
-
-        function rememberHandBounds(results) {
-            const hands = [];
-            if (results.leftHandLandmarks && results.leftHandLandmarks.length > 0) {
-                hands.push(...results.leftHandLandmarks);
-            }
-            if (results.rightHandLandmarks && results.rightHandLandmarks.length > 0) {
-                hands.push(...results.rightHandLandmarks);
-            }
-
-            if (hands.length === 0) {
-                latestHandBounds = null;
-                return;
-            }
-
-            let minX = 1;
-            let minY = 1;
-            let maxX = 0;
-            let maxY = 0;
-            hands.forEach((lm) => {
-                minX = Math.min(minX, lm.x);
-                minY = Math.min(minY, lm.y);
-                maxX = Math.max(maxX, lm.x);
-                maxY = Math.max(maxY, lm.y);
-            });
-
-            const now = Date.now();
-            const nextBounds = { minX, minY, maxX, maxY, seenAt: now };
-            if (latestHandBounds && now - latestHandBounds.seenAt < 500) {
-                // Stabilize the crop across frames. A jumping crop changes hand
-                // scale and background even while the signer holds one letter.
-                const alpha = 0.35;
-                latestHandBounds = {
-                    minX: latestHandBounds.minX + (nextBounds.minX - latestHandBounds.minX) * alpha,
-                    minY: latestHandBounds.minY + (nextBounds.minY - latestHandBounds.minY) * alpha,
-                    maxX: latestHandBounds.maxX + (nextBounds.maxX - latestHandBounds.maxX) * alpha,
-                    maxY: latestHandBounds.maxY + (nextBounds.maxY - latestHandBounds.maxY) * alpha,
-                    seenAt: now
-                };
-            } else {
-                latestHandBounds = nextBounds;
-            }
-        }
-
         function bytesToBase64(bytes) {
             let binary = '';
             const chunkSize = 8192;
@@ -165,94 +108,6 @@ const MEDIAPIPE_SCRIPT = `
             }
             return btoa(binary);
         }
-
-        window.captureAlphabetFrame = function(requestId, mirror) {
-            const captureStartedAt = performance.now();
-            try {
-                if (!videoElement || videoElement.readyState < 2) {
-                    throw new Error('Video is not ready yet.');
-                }
-
-                if (!alphabetCanvas) {
-                    alphabetCanvas = document.createElement('canvas');
-                    alphabetCanvas.width = 160;
-                    alphabetCanvas.height = 160;
-                    alphabetCtx = alphabetCanvas.getContext('2d', { willReadFrequently: true });
-                    alphabetCtx.imageSmoothingEnabled = true;
-                    alphabetCtx.imageSmoothingQuality = 'high';
-                }
-
-                const videoWidth = videoElement.videoWidth || 320;
-                const videoHeight = videoElement.videoHeight || 240;
-
-                let centerX = videoWidth / 2;
-                let centerY = videoHeight / 2;
-                let cropSize = Math.min(videoWidth, videoHeight) * 0.72;
-
-                if (latestHandBounds) {
-                    const boxCenterX = ((latestHandBounds.minX + latestHandBounds.maxX) / 2) * videoWidth;
-                    const boxCenterY = ((latestHandBounds.minY + latestHandBounds.maxY) / 2) * videoHeight;
-                    const boxWidth = Math.max(1, (latestHandBounds.maxX - latestHandBounds.minX) * videoWidth);
-                    const boxHeight = Math.max(1, (latestHandBounds.maxY - latestHandBounds.minY) * videoHeight);
-
-                    centerX = boxCenterX;
-                    centerY = boxCenterY;
-                    cropSize = Math.max(boxWidth, boxHeight) * 1.8;
-                    cropSize = Math.max(cropSize, Math.min(videoWidth, videoHeight) * 0.42);
-                    cropSize = Math.min(cropSize, Math.min(videoWidth, videoHeight));
-                }
-
-                let sourceX = centerX - cropSize / 2;
-                let sourceY = centerY - cropSize / 2;
-                sourceX = Math.max(0, Math.min(sourceX, videoWidth - cropSize));
-                sourceY = Math.max(0, Math.min(sourceY, videoHeight - cropSize));
-
-                alphabetCtx.save();
-                alphabetCtx.clearRect(0, 0, 160, 160);
-                if (mirror) {
-                    alphabetCtx.translate(160, 0);
-                    alphabetCtx.scale(-1, 1);
-                }
-                alphabetCtx.drawImage(
-                    videoElement,
-                    sourceX,
-                    sourceY,
-                    cropSize,
-                    cropSize,
-                    0,
-                    0,
-                    160,
-                    160
-                );
-                alphabetCtx.restore();
-
-                const rgba = alphabetCtx.getImageData(0, 0, 160, 160).data;
-                const rgb = new Uint8Array(160 * 160 * 3);
-                for (let rgbaIndex = 0, rgbIndex = 0; rgbaIndex < rgba.length; rgbaIndex += 4, rgbIndex += 3) {
-                    rgb[rgbIndex] = rgba[rgbaIndex];
-                    rgb[rgbIndex + 1] = rgba[rgbaIndex + 1];
-                    rgb[rgbIndex + 2] = rgba[rgbaIndex + 2];
-                }
-
-                const encodedRgb = bytesToBase64(rgb);
-                window.ReactNativeWebView.postMessage(JSON.stringify({
-                    type: 'image-frame',
-                    requestId,
-                    width: 160,
-                    height: 160,
-                    channels: 3,
-                    data: encodedRgb,
-                    captureMs: performance.now() - captureStartedAt,
-                    sentAt: Date.now()
-                }));
-            } catch (e) {
-                window.ReactNativeWebView.postMessage(JSON.stringify({
-                    type: 'image-frame-error',
-                    requestId,
-                    message: e.message || String(e)
-                }));
-            }
-        };
 
         function extractKeypoints(results) {
             const kp = [];
@@ -285,7 +140,6 @@ const MEDIAPIPE_SCRIPT = `
         }
         
         function onResults(results) {
-            rememberHandBounds(results);
             const hasHands = !!(
                 (results.leftHandLandmarks && results.leftHandLandmarks.length) ||
                 (results.rightHandLandmarks && results.rightHandLandmarks.length)
@@ -313,16 +167,28 @@ const MEDIAPIPE_SCRIPT = `
                 canvasCtx.restore();
             }
 
-            // Alphabet classification only needs a small hand-presence signal.
-            // Limit it to about 15 Hz so React Native stays responsive while
-            // reducing the wait before the next eligible image inference.
+            // Alphabet landmark mode: send 21 3D coordinates (63 floats) throttled to ~15 FPS
             if (recognitionMode === 'alphabet') {
                 const now = Date.now();
                 if (now - lastAlphabetSignalAt >= ALPHABET_SIGNAL_INTERVAL_MS) {
                     lastAlphabetSignalAt = now;
-                    window.ReactNativeWebView.postMessage(JSON.stringify({
-                        type: hasHands ? 'hands-detected' : 'no-hands'
-                    }));
+                    if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                        const hand = results.multiHandLandmarks[0];
+                        const landmarks = [];
+                        for (let i = 0; i < 21; i++) {
+                            landmarks.push(hand[i].x, hand[i].y, hand[i].z);
+                        }
+                        window.ReactNativeWebView.postMessage(JSON.stringify({
+                            type: 'hand-landmarks',
+                            landmarks: landmarks,
+                            timestamp: now
+                        }));
+                    } else {
+                        window.ReactNativeWebView.postMessage(JSON.stringify({
+                            type: 'no-hand',
+                            timestamp: now
+                        }));
+                    }
                 }
                 return;
             }
@@ -402,7 +268,8 @@ const MEDIAPIPE_SCRIPT = `
             onResults({
                 poseLandmarks,
                 leftHandLandmarks,
-                rightHandLandmarks
+                rightHandLandmarks,
+                multiHandLandmarks: handLandmarks
             });
         }
         
@@ -531,8 +398,9 @@ const MEDIAPIPE_SCRIPT = `
 const CameraProcessor = forwardRef<CameraProcessorRef, CameraProcessorProps>(
     ({
         onKeypointsExtracted,
+        onHandLandmarksExtracted,
+        onNoHandDetected,
         onSignDetected,
-        onImageFrameCaptured,
         onPerformance,
         onReady,
         onError,
@@ -549,17 +417,7 @@ const CameraProcessor = forwardRef<CameraProcessorRef, CameraProcessorProps>(
         useImperativeHandle(ref, () => ({
             captureFrame: () => {
             },
-            requestImageFrame: (requestId?: number, options?: { mirror?: boolean }) => {
-                if (!isWebViewReady) {
-                    onError?.('Camera is still starting.');
-                    return;
-                }
-
-                const id = typeof requestId === 'number' ? requestId : Date.now();
-                const shouldMirror = options?.mirror === true ? 'true' : 'false';
-                webViewRef.current?.injectJavaScript(`window.captureAlphabetFrame(${id}, ${shouldMirror}); true;`);
-            }
-        }), [isWebViewReady, onError]);
+        }), []);
 
         useEffect(() => {
             if (!permission?.granted) {
@@ -650,28 +508,20 @@ const CameraProcessor = forwardRef<CameraProcessorRef, CameraProcessorProps>(
                         const keypoints = new Float32Array(ab);
                         onKeypointsExtracted?.(keypoints);
                     }
+                } else if (message.type === 'hand-landmarks') {
+                    const landmarks = new Float32Array(message.landmarks);
+                    onHandLandmarksExtracted?.(landmarks, message.timestamp || Date.now());
+                } else if (message.type === 'no-hand') {
+                    onNoHandDetected?.(message.timestamp || Date.now());
+                    onKeypointsExtracted?.('no-hands');
                 } else if (message.type === 'no-hands-keypoints') {
                     const keypoints = new Float32Array(message.data);
                     onKeypointsExtracted?.(keypoints);
                 } else if (message.type === 'hands-detected') {
                     onKeypointsExtracted?.('hands-detected');
                 } else if (message.type === 'no-hands') {
+                    onNoHandDetected?.(message.timestamp || Date.now());
                     onKeypointsExtracted?.('no-hands');
-                } else if (message.type === 'image-frame') {
-                    const rgb = new Uint8Array(Buffer.from(message.data, 'base64'));
-                    const bridgeMs = typeof message.sentAt === 'number'
-                        ? Math.max(0, Date.now() - message.sentAt)
-                        : undefined;
-                    lastBridgeMsRef.current = bridgeMs;
-                    onImageFrameCaptured?.({
-                        requestId: message.requestId,
-                        width: message.width,
-                        height: message.height,
-                        channels: 3,
-                        rgb,
-                        captureMs: message.captureMs,
-                        bridgeMs,
-                    });
                 } else if (message.type === 'performance') {
                     onPerformance?.({
                         mode: message.mode === 'word' ? 'word' : 'alphabet',
@@ -684,9 +534,6 @@ const CameraProcessor = forwardRef<CameraProcessorRef, CameraProcessorProps>(
                                 : undefined
                         ),
                     });
-                } else if (message.type === 'image-frame-error') {
-                    debugLog('[CameraProcessor] Image frame error:', message.message);
-                    onError?.(message.message || 'Camera frame is not ready yet.');
                 } else if (message.type === 'log') {
                     debugLog('[WebView DOM]', message.message);
                     if (typeof message.message === 'string' && message.message.startsWith('Init failed:')) {
@@ -700,7 +547,7 @@ const CameraProcessor = forwardRef<CameraProcessorRef, CameraProcessorProps>(
             } catch (error) {
                 console.error('Error parsing WebView message:', error);
             }
-        }, [onKeypointsExtracted, onImageFrameCaptured, onPerformance, onReady, onError]);
+        }, [onKeypointsExtracted, onHandLandmarksExtracted, onNoHandDetected, onPerformance, onReady, onError]);
 
         const webViewPermissionProps = {
             onPermissionRequest: (event: any) => {

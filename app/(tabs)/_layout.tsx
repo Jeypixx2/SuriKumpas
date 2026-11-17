@@ -4,7 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { View, Text, StyleSheet } from 'react-native';
 import { AvatarProvider, useAvatarContext } from '../../lib/AvatarContext';
 import AvatarViewer from '../../components/AvatarViewer';
-import { globalAlphabetImageClassifier } from '../../lib/AlphabetImageClassifier';
+import { globalAlphabetClassifier } from '../../lib/AlphabetClassifier';
 import { globalClassifier } from '../../lib/SignClassifier';
 import LoadingScreen from '../../components/LoadingScreen';
 
@@ -56,7 +56,7 @@ function BootLoadingOverlay() {
       // Alphabet mode is optional at startup. Warm it only after the word
       // model has finished so both TFLite loads do not compete for resources.
       try {
-        await globalAlphabetImageClassifier.load();
+        await globalAlphabetClassifier.load();
         console.log('[Boot] Alphabet classifier preloaded.');
       } catch (error) {
         console.warn('[Boot] Alphabet classifier preload failed:', error);

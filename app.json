@@ -49,7 +49,11 @@
         "expo-asset",
         {
           "assets": [
-            "./assets/fsl_alphabet_model.tflite",
+            "./assets/model/alphabet/model.tflite",
+            "./assets/model/alphabet/labels.json",
+            "./assets/model/alphabet/motion.tflite",
+            "./assets/model/alphabet/motion_labels.json",
+            "./assets/model/alphabet/motion_config.json",
             "./assets/labels.txt",
             "./assets/model/sign_model1.tflite",
             "./assets/model/labels.txt",
@@ -125,7 +129,6 @@
           ]
         }
       ],
-
       [
         "expo-build-properties",
         {

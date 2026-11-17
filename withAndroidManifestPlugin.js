@@ -15,6 +15,7 @@ module.exports = function withAndroidManifestPlugin(config) {
       const app = androidManifest.manifest.application[0];
       app.$['tools:replace'] = 'android:appComponentFactory';
       app.$['android:appComponentFactory'] = 'androidx.core.app.CoreComponentFactory';
+      app.$['android:largeHeap'] = 'true';
     }
 
     return config;

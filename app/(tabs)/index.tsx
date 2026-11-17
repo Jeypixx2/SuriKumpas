@@ -5,12 +5,11 @@ import { useIsFocused } from '@react-navigation/native';
 import { MaterialIcons } from '@expo/vector-icons';
 import * as Speech from 'expo-speech';
 import CameraProcessor, {
-    CameraImageFrame,
     CameraPerformanceMetrics,
     CameraProcessorRef,
 } from '../../components/CameraProcessor';
 import ResultOverlay from '../../components/ResultOverlay';
-import { globalAlphabetImageClassifier } from '../../lib/AlphabetImageClassifier';
+import { globalAlphabetClassifier, AlphabetPredictionResult } from '../../lib/AlphabetClassifier';
 import { globalClassifier } from '../../lib/SignClassifier';
 import { FSLLabel, FSL_LABELS, tokenizeSentence } from '../../lib/labels';
 import Voice, { SpeechEndEvent, SpeechResultsEvent, SpeechErrorEvent } from '@dev-amirzubair/react-native-voice';
@@ -51,18 +50,6 @@ const WORD_GESTURE_PRE_ROLL_FRAMES = 3;
 const WORD_RESULT_VISIBLE_MS = 2500;
 const WORD_DEBUG_LOG_INTERVAL = 15;
 
-const ALPHABET_CONFIDENCE_THRESHOLD = 0.62;
-const ALPHABET_QUICK_ACCEPT_THRESHOLD = 0.95;
-const ALPHABET_MARGIN_THRESHOLD = 0.18;
-const ALPHABET_CONFIRMATION_COUNT = 3;
-const ALPHABET_HISTORY_LIMIT = 5;
-const CONFUSABLE_ALPHABET_LABELS = new Set(['M', 'N', 'S', 'T']);
-const CONFUSABLE_ALPHABET_CONFIDENCE_THRESHOLD = 0.75;
-const CONFUSABLE_ALPHABET_QUICK_ACCEPT_THRESHOLD = 0.97;
-const CONFUSABLE_ALPHABET_MARGIN_THRESHOLD = 0.25;
-const CONFUSABLE_ALPHABET_CONFIRMATION_COUNT = 4;
-const ALPHABET_INFERENCE_INTERVAL_MS = 180;
-const ALPHABET_FRAME_TIMEOUT_MS = 800;
 const DETECTION_COOLDOWN_MS = 500;
 
 const normalizeSpeechText = (text: string): string => {
@@ -79,6 +66,26 @@ const normalizeSpeechText = (text: string): string => {
     if (s === 'KITA TAYO BUKAS' || s === 'KITA BUKAS') s = 'KITA TAYO BUKAS';
     if (s === 'IKINAGAGALAK KITANG MAKILALA' || s === 'NICE TO MEET') s = 'NICE TO MEET YOU';
     return s;
+};
+
+/**
+ * Convert all-caps fingerspelled text (e.g. "JAYZEL", "BASUD") into Titlecase ("Jayzel", "Basud")
+ * so mobile TTS engines (Android Google TTS) pronounce it as a natural name/word
+ * instead of treating all-caps strings as acronyms and spelling them out letter by letter.
+ */
+const toPronounceableWord = (text: string): string => {
+    const trimmed = text.trim();
+    if (!trimmed) return '';
+    return trimmed
+        .split(/\s+/)
+        .map(word => {
+            if (word.length <= 1) return word;
+            if (word === word.toUpperCase()) {
+                return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+            }
+            return word;
+        })
+        .join(' ');
 };
 const NO_HANDS_GRACE_FRAMES = 3;
 const SWAP_HANDS_FOR_MIRROR = false;
@@ -114,9 +121,9 @@ function createWordDisplayLabel(label: string, labelIndex: number): FSLLabel {
 function modelErrorMessage(mode: RecognitionMode, error: unknown): string {
     const details = error instanceof Error ? error.message : String(error);
     if (mode === 'alphabet') {
-        return details.includes('Alphabet model file')
+        return details.includes('Alphabet model')
             ? details
-            : `Alphabet model file is missing or could not be loaded. Details: ${details}`;
+            : `Alphabet model files are missing or could not be loaded. Please ensure model.tflite, motion.tflite, and labels.json are placed in assets/model/alphabet/. Details: ${details}`;
     }
 
     return details.includes('Word model could not be loaded')
@@ -317,8 +324,8 @@ export default function MainScreen() {
             speechSessionFinalizedRef.current = false;
 
             isStoppingVoiceRef.current = true;
-            await Voice.stop().catch(() => {});
-            await Voice.cancel().catch(() => {});
+            await Voice.stop().catch(() => { });
+            await Voice.cancel().catch(() => { });
             isStoppingVoiceRef.current = false;
 
             await Voice.start('fil-PH');
@@ -337,8 +344,8 @@ export default function MainScreen() {
         if (!Voice) return;
         try {
             isStoppingVoiceRef.current = true;
-            await Voice.stop().catch(() => {});
-            await Voice.cancel().catch(() => {});
+            await Voice.stop().catch(() => { });
+            await Voice.cancel().catch(() => { });
             setIsListening(false);
             if (latestSpeechRef.current && !speechSessionFinalizedRef.current) {
                 finalizeSpeechSession();
@@ -424,7 +431,7 @@ export default function MainScreen() {
         };
     }, [clearPauseTimer, clearAutoRestartTimer]);
 
-    const alphabetClassifierRef = useRef(globalAlphabetImageClassifier);
+    const alphabetClassifierRef = useRef(globalAlphabetClassifier);
     const signClassifierRef = useRef(globalClassifier);
     const cameraRef = useRef<CameraProcessorRef>(null);
     const isFocused = useIsFocused();
@@ -445,6 +452,11 @@ export default function MainScreen() {
     const [activeMode, setActiveMode] = useState<RecognitionMode>('word');
     const [detectedLabel, setDetectedLabel] = useState<FSLLabel | null>(null);
     const [confidence, setConfidence] = useState(0);
+    const [spelledText, setSpelledText] = useState('');
+    const spelledTextRef = useRef('');
+    const wordCompletionTimerRef = useRef<NodeJS.Timeout | null>(null);
+    const lastSpokenWordRef = useRef('');
+    const [speakEachLetter, setSpeakEachLetter] = useState(false);
     const [showResult, setShowResult] = useState(false);
     const [status, setStatus] = useState('Paghahanda...');
     const [debugInfo, setDebugInfo] = useState('');
@@ -457,8 +469,6 @@ export default function MainScreen() {
     const [isCameraReady, setIsCameraReady] = useState(false);
     const [cameraError, setCameraError] = useState<string | null>(null);
 
-    const alphabetPredictionHistoryRef = useRef<string[]>([]);
-    const lastEmittedAlphabetLabelRef = useRef<string | null>(null);
     const wordSequenceLengthRef = useRef(INITIAL_WORD_SEQUENCE_LENGTH);
     const wordFrameBufferRef = useRef<Float32Array[]>([]);
     const previousWordFrameRef = useRef<Float32Array | null>(null);
@@ -467,14 +477,8 @@ export default function MainScreen() {
     const wordAttemptIdRef = useRef(0);
     const missingHandFrameCountRef = useRef(0);
     const lastDetectionRef = useRef<number>(0);
-    const lastAlphabetInferenceRef = useRef<number>(0);
-    const activeAlphabetRequestRef = useRef<number>(0);
-    const alphabetRequestCounterRef = useRef<number>(0);
-    const alphabetFrameTimeoutRef = useRef<NodeJS.Timeout | null>(null);
     const resultHideTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-    const isAlphabetProcessingRef = useRef<boolean>(false);
     const isWordProcessingRef = useRef<boolean>(false);
-    const processingAlphabetRequestRef = useRef<number>(0);
     const keypointLogCounterRef = useRef(0);
 
     const pulseDot = useRef(new Animated.Value(0.4)).current;
@@ -490,20 +494,9 @@ export default function MainScreen() {
         '#E57373' :
         status.includes('Walang') ? '#FF8A65' : '#5BC4B5';
 
-    const cancelPendingAlphabetFrame = useCallback(() => {
-        activeAlphabetRequestRef.current = 0;
-        processingAlphabetRequestRef.current = 0;
-        if (alphabetFrameTimeoutRef.current) {
-            clearTimeout(alphabetFrameTimeoutRef.current);
-            alphabetFrameTimeoutRef.current = null;
-        }
-    }, []);
-
     const clearAlphabetBuffers = useCallback(() => {
-        lastEmittedAlphabetLabelRef.current = null;
-        alphabetPredictionHistoryRef.current = [];
-        cancelPendingAlphabetFrame();
-    }, [cancelPendingAlphabetFrame]);
+        alphabetClassifierRef.current.reset();
+    }, []);
 
     const clearWordBuffers = useCallback(() => {
         wordAttemptIdRef.current += 1;
@@ -542,6 +535,13 @@ export default function MainScreen() {
         setPerformanceInfo('');
         clearAlphabetBuffers();
         clearWordBuffers();
+        if (wordCompletionTimerRef.current) {
+            clearTimeout(wordCompletionTimerRef.current);
+            wordCompletionTimerRef.current = null;
+        }
+        lastSpokenWordRef.current = '';
+        spelledTextRef.current = '';
+        setSpelledText('');
         setDebugInfo(nextError
             ? `Mode: ${mode === 'alphabet' ? 'Alphabet' : 'Word'} | Err: ${nextError}`
             : `Mode: ${mode === 'alphabet' ? 'Alphabet' : 'Word'} | Ready`
@@ -552,6 +552,13 @@ export default function MainScreen() {
         if (!isFocused) {
             clearAlphabetBuffers();
             clearWordBuffers();
+            if (wordCompletionTimerRef.current) {
+                clearTimeout(wordCompletionTimerRef.current);
+                wordCompletionTimerRef.current = null;
+            }
+            lastSpokenWordRef.current = '';
+            spelledTextRef.current = '';
+            setSpelledText('');
             missingHandFrameCountRef.current = 0;
         }
     }, [isFocused, clearAlphabetBuffers, clearWordBuffers]);
@@ -637,468 +644,545 @@ export default function MainScreen() {
 
     useEffect(() => {
         return () => {
-            if (alphabetFrameTimeoutRef.current) {
-                clearTimeout(alphabetFrameTimeoutRef.current);
-            }
             if (resultHideTimeoutRef.current) {
                 clearTimeout(resultHideTimeoutRef.current);
+            }
+            if (wordCompletionTimerRef.current) {
+                clearTimeout(wordCompletionTimerRef.current);
+                wordCompletionTimerRef.current = null;
             }
             stopDetectedSpeech();
         };
     }, [stopDetectedSpeech]);
 
-    const requestAlphabetFrame = useCallback((modeDebug: string) => {
-        if (!canDetect || activeMode !== 'alphabet') return;
-
-        const now = Date.now();
-        if (isAlphabetProcessingRef.current) return;
-        if (activeAlphabetRequestRef.current !== 0) return;
-        if (now - lastAlphabetInferenceRef.current < ALPHABET_INFERENCE_INTERVAL_MS) return;
-
-        const requestId = ++alphabetRequestCounterRef.current;
-        activeAlphabetRequestRef.current = requestId;
-        lastAlphabetInferenceRef.current = now;
-        setStatus('Sinusuri ang letra...');
-        setDebugInfo(`Mode: Alphabet | ${modeDebug}`);
-
-        cameraRef.current?.requestImageFrame(requestId, { mirror: isMirrored });
-        alphabetFrameTimeoutRef.current = setTimeout(() => {
-            if (activeAlphabetRequestRef.current === requestId) {
-                activeAlphabetRequestRef.current = 0;
-            }
-            alphabetFrameTimeoutRef.current = null;
-        }, ALPHABET_FRAME_TIMEOUT_MS);
-    }, [activeMode, canDetect, isMirrored]);
-
-    const handleImageFrameCaptured = useCallback(async (frame: CameraImageFrame) => {
-        if (!canDetect || activeMode !== 'alphabet') return;
-        if (!frame.requestId || frame.requestId !== activeAlphabetRequestRef.current) return;
-
-        if (alphabetFrameTimeoutRef.current) {
-            clearTimeout(alphabetFrameTimeoutRef.current);
-            alphabetFrameTimeoutRef.current = null;
+    const finalizeAndSpeakCurrentWord = useCallback(() => {
+        if (wordCompletionTimerRef.current) {
+            clearTimeout(wordCompletionTimerRef.current);
+            wordCompletionTimerRef.current = null;
         }
-        activeAlphabetRequestRef.current = 0;
-        isAlphabetProcessingRef.current = true;
-        processingAlphabetRequestRef.current = frame.requestId;
 
-        try {
-            const inferenceStartedAt = Date.now();
-            const result = await alphabetClassifierRef.current.classify(frame);
-            const inferenceMs = Date.now() - inferenceStartedAt;
-            if (processingAlphabetRequestRef.current !== frame.requestId) return;
+        const currentText = spelledTextRef.current.trim();
+        if (!currentText) return;
 
-            const isConfusableLetter = CONFUSABLE_ALPHABET_LABELS.has(result.label);
-            const confidenceThreshold = isConfusableLetter
-                ? CONFUSABLE_ALPHABET_CONFIDENCE_THRESHOLD
-                : ALPHABET_CONFIDENCE_THRESHOLD;
-            const marginThreshold = isConfusableLetter
-                ? CONFUSABLE_ALPHABET_MARGIN_THRESHOLD
-                : ALPHABET_MARGIN_THRESHOLD;
-            const quickAcceptThreshold = isConfusableLetter
-                ? CONFUSABLE_ALPHABET_QUICK_ACCEPT_THRESHOLD
-                : ALPHABET_QUICK_ACCEPT_THRESHOLD;
-            const requiredRepeatCount = isConfusableLetter
-                ? CONFUSABLE_ALPHABET_CONFIRMATION_COUNT
-                : ALPHABET_CONFIRMATION_COUNT;
+        // Get the last word currently being spelled
+        const words = currentText.split(/\s+/);
+        const lastWord = words[words.length - 1];
+        if (!lastWord) return;
 
-            if (result.confidence < confidenceThreshold || result.margin < marginThreshold) {
-                alphabetPredictionHistoryRef.current = [];
-                return;
-            }
-
-            const isQuickAccept = result.confidence >= quickAcceptThreshold;
-
-            if (!isQuickAccept) {
-                alphabetPredictionHistoryRef.current.push(result.label);
-                if (alphabetPredictionHistoryRef.current.length > ALPHABET_HISTORY_LIMIT) {
-                    alphabetPredictionHistoryRef.current.shift();
-                }
-            }
-
-            const recentPredictions = alphabetPredictionHistoryRef.current.slice(-requiredRepeatCount);
-            const hasConsecutiveConfirmation =
-                recentPredictions.length === requiredRepeatCount &&
-                recentPredictions.every(letter => letter === result.label);
-
-            if (isQuickAccept || hasConsecutiveConfirmation) {
-                if (result.label === lastEmittedAlphabetLabelRef.current) {
-                    alphabetPredictionHistoryRef.current = [];
-                    return;
-                }
-
-                const label: FSLLabel = {
-                    id: 200 + result.index,
-                    english: result.label,
-                    filipino: result.label,
-                    category: 'ALPABETO'
-                };
-
-                setDetectedLabel(label);
-                setConfidence(result.confidence);
-                keepResultVisible(2000);
-                setStatus(`${result.label} (${(result.confidence * 100).toFixed(0)}%)`);
-                speakAndLogSign(result.label, result.label);
-                lastDetectionRef.current = Date.now();
-                lastEmittedAlphabetLabelRef.current = result.label;
-                alphabetPredictionHistoryRef.current = [];
-            }
-        } catch (error) {
-            const message = modelErrorMessage('alphabet', error);
-            console.error('Alphabet Image Error:', error);
-            setAlphabetLoadError(message);
-            setIsAlphabetModelReady(false);
-            setDebugInfo('Mode: Alphabet | Err: ' + message);
-        } finally {
-            if (processingAlphabetRequestRef.current === frame.requestId) {
-                processingAlphabetRequestRef.current = 0;
-            }
-            isAlphabetProcessingRef.current = false;
+        // Convert all-caps (e.g. "JAYZEL") to TitleCase ("Jayzel") so TTS pronounces
+        // it as a coherent name/word rather than an acronym.
+        const pronounceableWord = toPronounceableWord(lastWord);
+        if (lastWord !== lastSpokenWordRef.current) {
+            lastSpokenWordRef.current = lastWord;
+            speakAndLogSign(lastWord, pronounceableWord);
+            setStatus(`Salita: ${pronounceableWord}`);
+            setDebugInfo(`Alphabet word complete: "${pronounceableWord}"`);
         }
-    }, [activeMode, canDetect, keepResultVisible, speakAndLogSign]);
 
-    const classifyCompletedGesture = useCallback(async (frames: Float32Array[]) => {
-        if (!canDetect || activeMode !== 'word') return;
-        if (isWordProcessingRef.current) return;
-
-        isWordProcessingRef.current = true;
-        try {
-            const inferenceStartedAt = Date.now();
-            const result = await signClassifierRef.current.classifyFSL(frames);
-            const inferenceMs = Date.now() - inferenceStartedAt;
-
-            if (result.confidence >= 0.40) {
-                const displayLabel = createWordDisplayLabel(result.label, result.labelIndex);
-                const filipinoText = formatFilipinoResult(displayLabel.filipino || displayLabel.english);
-                setDetectedLabel({
-                    ...displayLabel,
-                    filipino: filipinoText,
-                });
-                setConfidence(result.confidence);
-                keepResultVisible(WORD_RESULT_VISIBLE_MS);
-                setStatus(`${filipinoText} (${(result.confidence * 100).toFixed(0)}%)`);
-                speakAndLogSign(result.label, filipinoText);
-                setDebugInfo(`Pred: ${result.label} (${(result.confidence * 100).toFixed(0)}%) Infer:${inferenceMs}ms`);
-            } else {
-                setStatus(`Hindi natukoy (${(result.confidence * 100).toFixed(0)}%). Subukan muli.`);
-                setDebugInfo(`Mababang kumpiyansa: ${result.label} (${(result.confidence * 100).toFixed(0)}%)`);
-            }
-        } catch (error) {
-            const message = modelErrorMessage('word', error);
-            console.error('Word Sign Error:', error);
-            setWordLoadError(message);
-            setIsWordModelReady(false);
-            setDebugInfo('Mode: Word | Err: ' + message);
-        } finally {
-            isWordProcessingRef.current = false;
+        // Append space to prepare for the next word if not already present
+        if (!spelledTextRef.current.endsWith(' ')) {
+            const nextText = spelledTextRef.current + ' ';
+            spelledTextRef.current = nextText;
+            setSpelledText(nextText);
         }
-    }, [activeMode, canDetect, keepResultVisible, speakAndLogSign]);
+    }, [speakAndLogSign]);
 
-    const processWordKeypoints = useCallback(async (keypoints: Float32Array, handsDetected: boolean) => {
-        if (!canDetect || activeMode !== 'word') return;
+    const handleAlphabetResult = useCallback((result: AlphabetPredictionResult) => {
+        if (result.event.type === 'commit') {
+            const letter = result.topLabel;
+            const label: FSLLabel = {
+                id: 200 + letter.charCodeAt(0),
+                english: letter,
+                filipino: letter,
+                category: 'ALPABETO'
+            };
+            setDetectedLabel(label);
+            setConfidence(result.confidence);
+            keepResultVisible(2000);
+            setStatus(`${letter} (${(result.confidence * 100).toFixed(0)}%)`);
+            setDebugInfo(`Alphabet: ${letter} (${(result.confidence * 100).toFixed(0)}%) [${result.source}]`);
 
-        const wordFrame = convertLandmarkFrameToWordFrame(keypoints);
-        if (!wordFrame) return;
+            // Accumulate letter into fingerspelled word
+            const nextText = spelledTextRef.current + letter;
+            spelledTextRef.current = nextText;
+            setSpelledText(nextText);
 
-        const previousWordFrame = previousWordFrameRef.current;
-        const handMotion = previousWordFrame
-            ? calculateHandMotion(previousWordFrame, wordFrame)
-            : 0;
-        previousWordFrameRef.current = wordFrame;
+            // If user explicitly enabled letter-by-letter speech, speak it
+            if (speakEachLetter) {
+                speakAndLogSign(letter, letter);
+            }
 
-        if (!handsDetected) {
-            if (wordGestureMotionSeenRef.current && wordFrameBufferRef.current.length >= 8 && !isWordProcessingRef.current) {
+            // Schedule auto-completion to speak the whole word after 1.8s pause
+            if (wordCompletionTimerRef.current) {
+                clearTimeout(wordCompletionTimerRef.current);
+            }
+            wordCompletionTimerRef.current = setTimeout(() => {
+                finalizeAndSpeakCurrentWord();
+            }, 1800);
+
+        } else if (result.event.type === 'replace') {
+            const newLetter = result.event.newLabel;
+            const oldLetter = result.event.oldLabel;
+            const label: FSLLabel = {
+                id: 200 + newLetter.charCodeAt(0),
+                english: newLetter,
+                filipino: newLetter,
+                category: 'ALPABETO'
+            };
+            setDetectedLabel(label);
+            setConfidence(result.confidence);
+            keepResultVisible(2000);
+            setStatus(`${newLetter} (${(result.confidence * 100).toFixed(0)}%) [Replaced ${oldLetter}]`);
+            setDebugInfo(`Alphabet: ${newLetter} replaced ${oldLetter}`);
+
+            // Replace previous letter in fingerspelled text
+            const current = spelledTextRef.current;
+            const nextText = (current.endsWith(oldLetter) ? current.slice(0, -oldLetter.length) : current) + newLetter;
+            spelledTextRef.current = nextText;
+            setSpelledText(nextText);
+
+            if (speakEachLetter) {
+                speakAndLogSign(newLetter, newLetter);
+            }
+
+            // Schedule auto-completion to speak the whole word after 1.8s pause
+            if (wordCompletionTimerRef.current) {
+                clearTimeout(wordCompletionTimerRef.current);
+            }
+            wordCompletionTimerRef.current = setTimeout(() => {
+                finalizeAndSpeakCurrentWord();
+            }, 1800);
+
+        } else if (result.event.type === 'space') {
+            setStatus('[Space]');
+            setDebugInfo('Alphabet: [Space] emitted (1s no hand)');
+            // Hand removed for 1s: immediately finalize and speak the whole word
+            finalizeAndSpeakCurrentWord();
+        }
+}, [keepResultVisible, speakAndLogSign, speakEachLetter, finalizeAndSpeakCurrentWord]);
+
+const handleBackspace = useCallback(() => {
+    if (wordCompletionTimerRef.current) {
+        clearTimeout(wordCompletionTimerRef.current);
+        wordCompletionTimerRef.current = null;
+    }
+    const next = spelledTextRef.current.slice(0, -1);
+    spelledTextRef.current = next;
+    setSpelledText(next);
+    lastSpokenWordRef.current = '';
+}, []);
+
+const handleAddSpace = useCallback(() => {
+finalizeAndSpeakCurrentWord();
+    }, [finalizeAndSpeakCurrentWord]);
+
+const handleClearSpelling = useCallback(() => {
+    if (wordCompletionTimerRef.current) {
+        clearTimeout(wordCompletionTimerRef.current);
+        wordCompletionTimerRef.current = null;
+    }
+    lastSpokenWordRef.current = '';
+    spelledTextRef.current = '';
+    setSpelledText('');
+}, []);
+
+const handleSpeakWord = useCallback(() => {
+    const text = spelledTextRef.current.trim();
+    if (text) {
+        const pronounceable = toPronounceableWord(text);
+        speakAndLogSign(text, pronounceable);
+        setStatus(`Binasa: ${pronounceable}`);
+    }
+    }, [speakAndLogSign]);
+
+const handleHandLandmarksExtracted = useCallback(async (landmarks: Float32Array, timestamp: number) => {
+    if (!canDetect || activeMode !== 'alphabet') return;
+    missingHandFrameCountRef.current = 0;
+    try {
+        const result = await alphabetClassifierRef.current.processLandmarks(landmarks, timestamp);
+        if (result) {
+            handleAlphabetResult(result);
+        }
+    } catch (error) {
+        const message = modelErrorMessage('alphabet', error);
+        console.error('Alphabet Landmarks Error:', error);
+        setAlphabetLoadError(message);
+        setIsAlphabetModelReady(false);
+        setDebugInfo('Mode: Alphabet | Err: ' + message);
+    }
+}, [canDetect, activeMode, handleAlphabetResult]);
+
+const handleNoHandDetected = useCallback(async (timestamp: number) => {
+    if (!canDetect || activeMode !== 'alphabet') return;
+    try {
+        const result = await alphabetClassifierRef.current.processNoHand(timestamp);
+        if (result) {
+            handleAlphabetResult(result);
+        }
+    } catch (error) {
+        console.error('Alphabet No Hand Error:', error);
+    }
+}, [canDetect, activeMode, handleAlphabetResult]);
+
+const classifyCompletedGesture = useCallback(async (frames: Float32Array[]) => {
+    if (!canDetect || activeMode !== 'word') return;
+    if (isWordProcessingRef.current) return;
+
+    isWordProcessingRef.current = true;
+    try {
+        const inferenceStartedAt = Date.now();
+        const result = await signClassifierRef.current.classifyFSL(frames);
+        const inferenceMs = Date.now() - inferenceStartedAt;
+
+        if (result.confidence >= 0.40) {
+            const displayLabel = createWordDisplayLabel(result.label, result.labelIndex);
+            const filipinoText = formatFilipinoResult(displayLabel.filipino || displayLabel.english);
+            setDetectedLabel({
+                ...displayLabel,
+                filipino: filipinoText,
+            });
+            setConfidence(result.confidence);
+            keepResultVisible(WORD_RESULT_VISIBLE_MS);
+            setStatus(`${filipinoText} (${(result.confidence * 100).toFixed(0)}%)`);
+            speakAndLogSign(result.label, filipinoText);
+            setDebugInfo(`Pred: ${result.label} (${(result.confidence * 100).toFixed(0)}%) Infer:${inferenceMs}ms`);
+        } else {
+            setStatus(`Hindi natukoy (${(result.confidence * 100).toFixed(0)}%). Subukan muli.`);
+            setDebugInfo(`Mababang kumpiyansa: ${result.label} (${(result.confidence * 100).toFixed(0)}%)`);
+        }
+    } catch (error) {
+        const message = modelErrorMessage('word', error);
+        console.error('Word Sign Error:', error);
+        setWordLoadError(message);
+        setIsWordModelReady(false);
+        setDebugInfo('Mode: Word | Err: ' + message);
+    } finally {
+        isWordProcessingRef.current = false;
+    }
+}, [activeMode, canDetect, keepResultVisible, speakAndLogSign]);
+
+const processWordKeypoints = useCallback(async (keypoints: Float32Array, handsDetected: boolean) => {
+    if (!canDetect || activeMode !== 'word') return;
+
+    const wordFrame = convertLandmarkFrameToWordFrame(keypoints);
+    if (!wordFrame) return;
+
+    const previousWordFrame = previousWordFrameRef.current;
+    const handMotion = previousWordFrame
+        ? calculateHandMotion(previousWordFrame, wordFrame)
+        : 0;
+    previousWordFrameRef.current = wordFrame;
+
+    if (!handsDetected) {
+        if (wordGestureMotionSeenRef.current && wordFrameBufferRef.current.length >= 8 && !isWordProcessingRef.current) {
+            const frames = resampleCompletedGesture(wordFrameBufferRef.current, wordSequenceLengthRef.current);
+            resetWordPredictionState();
+            await classifyCompletedGesture(frames);
+        }
+        return;
+    }
+
+    if (handMotion >= WORD_HAND_MOTION_THRESHOLD) {
+        wordGestureMotionSeenRef.current = true;
+        wordStillFrameCountRef.current = 0;
+        wordFrameBufferRef.current.push(wordFrame);
+        if (wordFrameBufferRef.current.length > 60) {
+            wordFrameBufferRef.current.shift();
+        }
+        setStatus(`Kinukunan ang senyas... (${wordFrameBufferRef.current.length})`);
+        setDebugInfo(`Mode: Word | Signing... Frames:${wordFrameBufferRef.current.length} Motion:${handMotion.toFixed(4)}`);
+    } else if (wordGestureMotionSeenRef.current) {
+        wordStillFrameCountRef.current += 1;
+        wordFrameBufferRef.current.push(wordFrame);
+
+        if (wordStillFrameCountRef.current >= 3) {
+            const capturedCount = wordFrameBufferRef.current.length;
+            if (capturedCount >= 8 && !isWordProcessingRef.current) {
+                setStatus('Isinasalin ang senyas...');
                 const frames = resampleCompletedGesture(wordFrameBufferRef.current, wordSequenceLengthRef.current);
                 resetWordPredictionState();
                 await classifyCompletedGesture(frames);
-            }
-            return;
-        }
-
-        if (handMotion >= WORD_HAND_MOTION_THRESHOLD) {
-            wordGestureMotionSeenRef.current = true;
-            wordStillFrameCountRef.current = 0;
-            wordFrameBufferRef.current.push(wordFrame);
-            if (wordFrameBufferRef.current.length > 60) {
-                wordFrameBufferRef.current.shift();
-            }
-            setStatus(`Kinukunan ang senyas... (${wordFrameBufferRef.current.length})`);
-            setDebugInfo(`Mode: Word | Signing... Frames:${wordFrameBufferRef.current.length} Motion:${handMotion.toFixed(4)}`);
-        } else if (wordGestureMotionSeenRef.current) {
-            wordStillFrameCountRef.current += 1;
-            wordFrameBufferRef.current.push(wordFrame);
-
-            if (wordStillFrameCountRef.current >= 3) {
-                const capturedCount = wordFrameBufferRef.current.length;
-                if (capturedCount >= 8 && !isWordProcessingRef.current) {
-                    setStatus('Isinasalin ang senyas...');
-                    const frames = resampleCompletedGesture(wordFrameBufferRef.current, wordSequenceLengthRef.current);
-                    resetWordPredictionState();
-                    await classifyCompletedGesture(frames);
-                } else if (capturedCount < 8) {
-                    resetWordPredictionState();
-                    setStatus('Handa na. Magpakita ng salita.');
-                }
-            }
-        } else {
-            while (wordFrameBufferRef.current.length > WORD_GESTURE_PRE_ROLL_FRAMES) {
-                wordFrameBufferRef.current.shift();
-            }
-            wordFrameBufferRef.current.push(wordFrame);
-            if (!showResult && !isWordProcessingRef.current) {
-                setStatus('Handa na. Isenyas ang salita.');
+            } else if (capturedCount < 8) {
+                resetWordPredictionState();
+                setStatus('Handa na. Magpakita ng salita.');
             }
         }
-    }, [activeMode, canDetect, showResult, classifyCompletedGesture, resetWordPredictionState]);
-
-    const handleHandsMissing = useCallback(() => {
-        missingHandFrameCountRef.current += 1;
-        if (missingHandFrameCountRef.current < NO_HANDS_GRACE_FRAMES) return;
-        if (missingHandFrameCountRef.current > NO_HANDS_GRACE_FRAMES) return;
-
-        setStatus('Walang kamay na nakita.');
-        if (activeMode === 'word') {
-            resetWordPredictionState();
-            setShowResult(false);
-            return;
+    } else {
+        while (wordFrameBufferRef.current.length > WORD_GESTURE_PRE_ROLL_FRAMES) {
+            wordFrameBufferRef.current.shift();
         }
-
-        clearAlphabetBuffers();
-    }, [activeMode, clearAlphabetBuffers, resetWordPredictionState]);
-
-    const handleKeypointsExtracted = useCallback(async (
-        keypoints: Float32Array | 'hands-detected' | 'no-hands'
-    ) => {
-        if (!canDetect) return;
-        if (keypoints === 'no-hands') {
-            handleHandsMissing();
-            return;
+        wordFrameBufferRef.current.push(wordFrame);
+        if (!showResult && !isWordProcessingRef.current) {
+            setStatus('Handa na. Isenyas ang salita.');
         }
+    }
+}, [activeMode, canDetect, showResult, classifyCompletedGesture, resetWordPredictionState]);
 
-        if (keypoints === 'hands-detected') {
-            missingHandFrameCountRef.current = 0;
-            if (activeMode === 'alphabet' && Date.now() - lastDetectionRef.current >= DETECTION_COOLDOWN_MS) {
-                requestAlphabetFrame('Hand detected');
-            }
-            return;
-        }
+const handleHandsMissing = useCallback(() => {
+    missingHandFrameCountRef.current += 1;
+    if (missingHandFrameCountRef.current < NO_HANDS_GRACE_FRAMES) return;
+    if (missingHandFrameCountRef.current > NO_HANDS_GRACE_FRAMES) return;
 
-        const { leftVisible, rightVisible } = getWordHandVisibility(keypoints);
-        const handsDetected = leftVisible || rightVisible;
+    setStatus('Walang kamay na nakita.');
+    if (activeMode === 'word') {
+        resetWordPredictionState();
+        setShowResult(false);
+        return;
+    }
 
-        if (activeMode === 'word') {
-            if (!handsDetected) {
-                handleHandsMissing();
-                if (missingHandFrameCountRef.current < NO_HANDS_GRACE_FRAMES) {
-                    await processWordKeypoints(keypoints, false);
-                }
-                return;
-            }
+    clearAlphabetBuffers();
+}, [activeMode, clearAlphabetBuffers, resetWordPredictionState]);
 
-            missingHandFrameCountRef.current = 0;
-            await processWordKeypoints(keypoints, true);
-            return;
-        }
+const handleKeypointsExtracted = useCallback(async (
+    keypoints: Float32Array | 'hands-detected' | 'no-hands'
+) => {
+    if (!canDetect || activeMode !== 'word') return;
+    if (keypoints === 'no-hands') {
+        handleHandsMissing();
+        return;
+    }
 
-        if (!handsDetected) {
-            handleHandsMissing();
-            return;
-        }
-
+    if (keypoints === 'hands-detected') {
         missingHandFrameCountRef.current = 0;
+        return;
+    }
 
-        const now = Date.now();
-        if (now - lastDetectionRef.current < DETECTION_COOLDOWN_MS) return;
+    const { leftVisible, rightVisible } = getWordHandVisibility(keypoints);
+    const handsDetected = leftVisible || rightVisible;
 
-        requestAlphabetFrame('Hand detected');
-    }, [activeMode, canDetect, requestAlphabetFrame, handleHandsMissing, processWordKeypoints]);
-
-    const handleCameraReady = useCallback(() => {
-        setCameraError(null);
-        setIsCameraReady(true);
-    }, []);
-
-    const handleCameraPerformance = useCallback((metrics: CameraPerformanceMetrics) => {
-        setPerformanceInfo(
-            `${metrics.mode === 'word' ? 'Pose+Hands' : 'Hands'}:` +
-            `${metrics.processedFps.toFixed(1)}fps ` +
-            `MP:${metrics.averageMediaPipeMs.toFixed(0)}ms`
-        );
-    }, []);
-
-    const handleCameraIssue = useCallback((message: string) => {
-        const normalizedMessage = message.toLowerCase();
-        const isStartupDelay =
-            normalizedMessage.includes('still starting') ||
-            normalizedMessage.includes('not ready yet');
-
-        if (isStartupDelay) {
-            if (!isCameraReady) setStatus('Binubuksan ang camera...');
-            return;
+    if (!handsDetected) {
+        handleHandsMissing();
+        if (missingHandFrameCountRef.current < NO_HANDS_GRACE_FRAMES) {
+            await processWordKeypoints(keypoints, false);
         }
+        return;
+    }
 
-        if (
-            normalizedMessage.includes('permission') ||
-            normalizedMessage.includes('init failed') ||
-            normalizedMessage.includes('denied') ||
-            normalizedMessage.includes('failed')
-        ) {
-            setCameraError(message);
-            setIsCameraReady(false);
-            return;
-        }
+    missingHandFrameCountRef.current = 0;
+    await processWordKeypoints(keypoints, true);
+}, [activeMode, canDetect, handleHandsMissing, processWordKeypoints]);
 
-        setDebugInfo(`Camera: ${message}`);
-    }, [isCameraReady]);
+const handleCameraReady = useCallback(() => {
+    setCameraError(null);
+    setIsCameraReady(true);
+}, []);
 
-    return (
-        <View style={styles.container}>
-            <View style={styles.topHalf}>
-                <View style={styles.textContainer}>
-                    {voiceErrorMessage ? (
-                        <View style={styles.errorCard}>
-                            <MaterialIcons name="error-outline" size={18} color="#E57373" style={{ marginRight: 6 }} />
-                            <Text style={styles.errorText}>{voiceErrorMessage}</Text>
-                        </View>
-                    ) : null}
+const handleCameraPerformance = useCallback((metrics: CameraPerformanceMetrics) => {
+    setPerformanceInfo(
+        `${metrics.mode === 'word' ? 'Pose+Hands' : 'Hands'}:` +
+        `${metrics.processedFps.toFixed(1)}fps ` +
+        `MP:${metrics.averageMediaPipeMs.toFixed(0)}ms`
+    );
+}, []);
 
-                    {sequenceToPlay && sequenceToPlay.length > 0 && (
-                        <View style={styles.sequenceContainer}>
-                            {sequenceToPlay.slice(0, 5).map((item, index) => (
-                                <View key={index} style={styles.sequenceBadge}>
-                                    <Text style={styles.sequenceText}>
-                                        {item.display}
-                                    </Text>
-                                </View>
-                            ))}
-                            {sequenceToPlay.length > 5 && (
-                                <Text style={styles.moreText}>+{sequenceToPlay.length - 5} more</Text>
-                            )}
-                        </View>
-                    )}
-                </View>
+const handleCameraIssue = useCallback((message: string) => {
+    const normalizedMessage = message.toLowerCase();
+    const isStartupDelay =
+        normalizedMessage.includes('still starting') ||
+        normalizedMessage.includes('not ready yet');
 
-                {/* Small Side Mic Trigger Button inside 3D View */}
-                <TouchableOpacity
-                    style={[
-                        styles.sideMicButton,
-                        isListening && styles.sideMicButtonActive
-                    ]}
-                    onPress={toggleListening}
-                    activeOpacity={0.8}
-                >
-                    <MaterialIcons
-                        name={isListening ? 'mic' : 'mic-none'}
-                        size={24}
-                        color={isListening ? '#FFFFFF' : '#7E57C2'}
-                    />
-                </TouchableOpacity>
+    if (isStartupDelay) {
+        if (!isCameraReady) setStatus('Binubuksan ang camera...');
+        return;
+    }
 
-                <View style={styles.micContainer}>
-                    <MicButton
-                        onPress={toggleListening}
-                        isListening={isListening}
-                        size={100}
-                    />
-                    <Text style={styles.micHint}>
-                        {isListening ? 'LISTENING... TAP TO TRANSLATE' : 'TAP MIC TO SPEAK'}
-                    </Text>
-                </View>
-            </View>
+    if (
+        normalizedMessage.includes('permission') ||
+        normalizedMessage.includes('init failed') ||
+        normalizedMessage.includes('denied') ||
+        normalizedMessage.includes('failed')
+    ) {
+        setCameraError(message);
+        setIsCameraReady(false);
+        return;
+    }
 
-            <View style={styles.bottomHalf}>
-                <View style={StyleSheet.absoluteFillObject}>
-                    <CameraProcessor
-                        ref={cameraRef}
-                        style={styles.camera}
-                        onKeypointsExtracted={handleKeypointsExtracted}
-                        onImageFrameCaptured={handleImageFrameCaptured}
-                        onPerformance={handleCameraPerformance}
-                        onReady={handleCameraReady}
-                        onError={handleCameraIssue}
-                        active={isFocused}
-                        recognitionMode={activeMode}
-                    />
-                    {!canDetect && (
-                        <View style={styles.readinessOverlay}>
-                            {isLoadingDetection ? (
-                                <ActivityIndicator size="small" color="#5BC4B5" />
-                            ) : (
-                                <MaterialIcons name="error-outline" size={24} color="#E57373" />
-                            )}
-                            <Text style={[
-                                styles.readinessText,
-                                !isLoadingDetection && styles.readinessErrorText
-                            ]}>
-                                {status}
-                            </Text>
-                        </View>
-                    )}
-                </View>
+    setDebugInfo(`Camera: ${message}`);
+}, [isCameraReady]);
 
-                <View style={styles.statusPill}>
-                    <Animated.View style={[
-                        styles.statusDot,
-                        {
-                            opacity: pulseDot,
-                            backgroundColor: statusDotColor
-                        }
-                    ]} />
-                    <Text style={styles.statusText}>{status}</Text>
-                </View>
+return (
+    <View style={styles.container}>
+        <View style={styles.topHalf}>
+            <View style={styles.textContainer}>
+                {voiceErrorMessage ? (
+                    <View style={styles.errorCard}>
+                        <MaterialIcons name="error-outline" size={18} color="#E57373" style={{ marginRight: 6 }} />
+                        <Text style={styles.errorText}>{voiceErrorMessage}</Text>
+                    </View>
+                ) : null}
 
-                {!!(debugInfo || performanceInfo) && (
-                    <View style={styles.debugPanel}>
-                        <Text style={styles.debugText}>{debugInfo}</Text>
-                        {!!performanceInfo && <Text style={styles.debugText}>{performanceInfo}</Text>}
+                {sequenceToPlay && sequenceToPlay.length > 0 && (
+                    <View style={styles.sequenceContainer}>
+                        {sequenceToPlay.slice(0, 5).map((item, index) => (
+                            <View key={index} style={styles.sequenceBadge}>
+                                <Text style={styles.sequenceText}>
+                                    {item.display}
+                                </Text>
+                            </View>
+                        ))}
+                        {sequenceToPlay.length > 5 && (
+                            <Text style={styles.moreText}>+{sequenceToPlay.length - 5} more</Text>
+                        )}
                     </View>
                 )}
+            </View>
 
-                <ResultOverlay label={detectedLabel} confidence={confidence} visible={showResult} />
+            {/* Small Side Mic Trigger Button inside 3D View */}
+            <TouchableOpacity
+                style={[
+                    styles.sideMicButton,
+                    isListening && styles.sideMicButtonActive
+                ]}
+                onPress={toggleListening}
+                activeOpacity={0.8}
+            >
+                <MaterialIcons
+                    name={isListening ? 'mic' : 'mic-none'}
+                    size={24}
+                    color={isListening ? '#FFFFFF' : '#7E57C2'}
+                />
+            </TouchableOpacity>
 
-                <View style={styles.dotPattern}>
-                    {dotPattern}
-                </View>
-
-                <View style={styles.modeToggle}>
-                    <TouchableOpacity
-                        style={[styles.modeButton, activeMode === 'alphabet' && styles.modeButtonActive]}
-                        onPress={() => switchRecognitionMode('alphabet')}
-                    >
-                        <MaterialIcons
-                            name="sort-by-alpha"
-                            size={17}
-                            color={activeMode === 'alphabet' ? '#FFFFFF' : '#5BC4B5'}
-                        />
-                        <Text style={[styles.modeText, activeMode === 'alphabet' && styles.modeTextActive]}>
-                            Alphabet
-                        </Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                        style={[styles.modeButton, activeMode === 'word' && styles.modeButtonActive]}
-                        onPress={() => switchRecognitionMode('word')}
-                    >
-                        <MaterialIcons
-                            name="gesture"
-                            size={17}
-                            color={activeMode === 'word' ? '#FFFFFF' : '#5BC4B5'}
-                        />
-                        <Text style={[styles.modeText, activeMode === 'word' && styles.modeTextActive]}>
-                            Word
-                        </Text>
-                    </TouchableOpacity>
-                </View>
-
-                <TouchableOpacity
-                    style={styles.mirrorToggle}
-                    onPress={() => setIsMirrored(!isMirrored)}
-                >
-                    <MaterialIcons name="flip" size={18} color="#5BC4B5" />
-                    <Text style={styles.mirrorText}>{isMirrored ? 'Mirrored' : 'Normal'}</Text>
-                </TouchableOpacity>
+            <View style={styles.micContainer}>
+                <MicButton
+                    onPress={toggleListening}
+                    isListening={isListening}
+                    size={100}
+                />
+                <Text style={styles.micHint}>
+                    {isListening ? 'LISTENING... TAP TO TRANSLATE' : 'TAP MIC TO SPEAK'}
+                </Text>
             </View>
         </View>
-    );
+
+        <View style={styles.bottomHalf}>
+            <View style={StyleSheet.absoluteFillObject}>
+                <CameraProcessor
+                    ref={cameraRef}
+                    style={styles.camera}
+                    onKeypointsExtracted={handleKeypointsExtracted}
+                    onHandLandmarksExtracted={handleHandLandmarksExtracted}
+                    onNoHandDetected={handleNoHandDetected}
+                    onPerformance={handleCameraPerformance}
+                    onReady={handleCameraReady}
+                    onError={handleCameraIssue}
+                    active={isFocused}
+                    recognitionMode={activeMode}
+                />
+                {!canDetect && (
+                    <View style={styles.readinessOverlay}>
+                        {isLoadingDetection ? (
+                            <ActivityIndicator size="small" color="#5BC4B5" />
+                        ) : (
+                            <MaterialIcons name="error-outline" size={24} color="#E57373" />
+                        )}
+                        <Text style={[
+                            styles.readinessText,
+                            !isLoadingDetection && styles.readinessErrorText
+                        ]}>
+                            {status}
+                        </Text>
+                    </View>
+                )}
+            </View>
+
+            <View style={styles.statusPill}>
+                <Animated.View style={[
+                    styles.statusDot,
+                    {
+                        opacity: pulseDot,
+                        backgroundColor: statusDotColor
+                    }
+                ]} />
+                <Text style={styles.statusText}>{status}</Text>
+            </View>
+
+            {!!(debugInfo || performanceInfo) && (
+                <View style={styles.debugPanel}>
+                    <Text style={styles.debugText}>{debugInfo}</Text>
+                    {!!performanceInfo && <Text style={styles.debugText}>{performanceInfo}</Text>}
+                </View>
+            )}
+
+            <ResultOverlay label={detectedLabel} confidence={confidence} visible={showResult} />
+
+            {activeMode === 'alphabet' && (
+                <View style={styles.spellingBar}>
+                    <View style={styles.spellingTextContainer}>
+                        <Text style={styles.spellingText} numberOfLines={1}>
+                            {spelledText || ' '}
+                            <Text style={styles.spellingCursor}>|</Text>
+                        </Text>
+                    </View>
+                    <View style={styles.spellingButtons}>
+                        <TouchableOpacity
+                            style={[styles.spellingButton, speakEachLetter && styles.spellingButtonActive]}
+                            onPress={() => setSpeakEachLetter(prev => !prev)}
+                            accessibilityLabel="Toggle letter speech"
+                        >
+                            <Text style={[styles.spellingButtonText, speakEachLetter && styles.spellingButtonTextActive]}>
+                                {speakEachLetter ? '🔤' : '💬'}
+                            </Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity style={styles.spellingButton} onPress={handleBackspace}>
+                            <Text style={styles.spellingButtonText}>⌫</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity style={styles.spellingButton} onPress={handleAddSpace}>
+                            <Text style={styles.spellingButtonText}>␣</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity style={styles.spellingButton} onPress={handleSpeakWord}>
+                            <Text style={styles.spellingButtonText}>🔊</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity style={[styles.spellingButton, styles.spellingClearButton]} onPress={handleClearSpelling}>
+                            <Text style={[styles.spellingButtonText, styles.spellingClearText]}>✕</Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
+            )}
+
+            <View style={styles.dotPattern}>
+                {dotPattern}
+            </View>
+
+            <View style={styles.modeToggle}>
+                <TouchableOpacity
+                    style={[styles.modeButton, activeMode === 'alphabet' && styles.modeButtonActive]}
+                    onPress={() => switchRecognitionMode('alphabet')}
+                >
+                    <MaterialIcons
+                        name="sort-by-alpha"
+                        size={17}
+                        color={activeMode === 'alphabet' ? '#FFFFFF' : '#5BC4B5'}
+                    />
+                    <Text style={[styles.modeText, activeMode === 'alphabet' && styles.modeTextActive]}>
+                        Alphabet
+                    </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                    style={[styles.modeButton, activeMode === 'word' && styles.modeButtonActive]}
+                    onPress={() => switchRecognitionMode('word')}
+                >
+                    <MaterialIcons
+                        name="gesture"
+                        size={17}
+                        color={activeMode === 'word' ? '#FFFFFF' : '#5BC4B5'}
+                    />
+                    <Text style={[styles.modeText, activeMode === 'word' && styles.modeTextActive]}>
+                        Word
+                    </Text>
+                </TouchableOpacity>
+            </View>
+
+            <TouchableOpacity
+                style={styles.mirrorToggle}
+                onPress={() => setIsMirrored(!isMirrored)}
+            >
+                <MaterialIcons name="flip" size={18} color="#5BC4B5" />
+                <Text style={styles.mirrorText}>{isMirrored ? 'Mirrored' : 'Normal'}</Text>
+            </TouchableOpacity>
+        </View>
+    </View>
+);
 }
 
 const styles = StyleSheet.create({
@@ -1272,4 +1356,72 @@ const styles = StyleSheet.create({
     mirrorText: { color: '#2B9C8E', marginLeft: 6, fontSize: 11, fontWeight: 'bold', letterSpacing: 0.4 },
     dotPattern: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, pointerEvents: 'none' },
     dot: { position: 'absolute', width: 3, height: 3, borderRadius: 1.5, backgroundColor: 'rgba(91, 196, 181, 0.15)' },
+    spellingBar: {
+        position: 'absolute',
+        bottom: 76,
+        left: 16,
+        right: 16,
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#FFFFFF',
+        borderRadius: 22,
+        borderWidth: 1.5,
+        borderColor: '#A8E6CF',
+        paddingHorizontal: 14,
+        paddingVertical: 8,
+        shadowColor: '#5BC4B5',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.15,
+        shadowRadius: 6,
+        elevation: 4,
+        zIndex: 110,
+    },
+    spellingTextContainer: {
+        flex: 1,
+        marginRight: 8,
+    },
+    spellingText: {
+        fontSize: 20,
+        fontFamily: 'monospace',
+        fontWeight: 'bold',
+        color: '#2D3561',
+        letterSpacing: 3,
+    },
+    spellingCursor: {
+        color: '#5BC4B5',
+        fontWeight: '300',
+    },
+    spellingButtons: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+    },
+    spellingButton: {
+        width: 36,
+        height: 36,
+        borderRadius: 18,
+        backgroundColor: '#F0FAF8',
+        borderWidth: 1,
+        borderColor: '#A8E6CF',
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    spellingButtonActive: {
+        backgroundColor: '#5BC4B5',
+        borderColor: '#5BC4B5',
+    },
+    spellingButtonText: {
+        fontSize: 16,
+        color: '#5BC4B5',
+    },
+    spellingButtonTextActive: {
+        color: '#FFFFFF',
+    },
+    spellingClearButton: {
+        backgroundColor: '#FFF0F0',
+        borderColor: '#FFCCCC',
+    },
+    spellingClearText: {
+        color: '#E57373',
+    },
 });
