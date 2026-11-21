@@ -398,6 +398,7 @@ interface AvatarViewerProps {
     avatarUri?: string;
     onSequenceEnd?: () => void;
     active?: boolean;
+    pointerEvents?: 'box-none' | 'none' | 'box-only' | 'auto';
 }
 
 export default function AvatarViewer({
@@ -409,7 +410,8 @@ export default function AvatarViewer({
     sequenceToPlay,
     onSequenceEnd,
     avatarUri = './avatar3.vrm',
-    active = true
+    active = true,
+    pointerEvents = 'none'
 }: AvatarViewerProps) {
     const glRef = useRef<ExpoWebGLRenderingContext | null>(null);
     const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
@@ -478,8 +480,8 @@ export default function AvatarViewer({
                 0.01,
                 100
             );
-            camera.position.set(0, 1.35, 1.4); // Zoomed in closer to make signs bigger
-            camera.lookAt(0, 1.35, 0); // Focus on the upper chest
+            camera.position.set(0, 1.32, 1.45); // Centered so chest signing is high and clear above the leg word card
+            camera.lookAt(0, 1.32, 0); // Focus on upper chest where signing happens
             cameraRef.current = camera;
 
             const ambientLight = new THREE.AmbientLight(0xffffff, 1.2); // Boosted ambient light for standard glTF
@@ -756,6 +758,9 @@ export default function AvatarViewer({
     useEffect(() => {
         if (!signToPlay && !letterToPlay && (!sequenceToPlay || sequenceToPlay.length === 0)) {
             ++playRequestRef.current;
+            if (animatorRef.current) {
+                animatorRef.current.stopSignAnimation();
+            }
         }
     }, [signToPlay, letterToPlay, sequenceToPlay]);
 
@@ -832,9 +837,10 @@ export default function AvatarViewer({
     }, []);
 
     return (
-        <View style={[styles.container, style]}>
+        <View style={[styles.container, style]} pointerEvents={pointerEvents}>
             <GLView
                 style={styles.glView}
+                pointerEvents="none"
                 onContextCreate={onContextCreate}
             />
         </View>

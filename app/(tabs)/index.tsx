@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
-import { StyleSheet, View, Text, TouchableOpacity, Animated, ActivityIndicator } from 'react-native';
+import { StyleSheet, View, Text, TouchableOpacity, Animated, ActivityIndicator, ScrollView, Platform, StatusBar } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useIsFocused } from '@react-navigation/native';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -12,6 +12,7 @@ import ResultOverlay from '../../components/ResultOverlay';
 import { globalAlphabetClassifier, AlphabetPredictionResult } from '../../lib/AlphabetClassifier';
 import { globalClassifier } from '../../lib/SignClassifier';
 import { FSLLabel, FSL_LABELS, tokenizeSentence } from '../../lib/labels';
+import { getWordSuggestions } from '../../lib/wordSuggestions';
 import Voice, { SpeechEndEvent, SpeechResultsEvent, SpeechErrorEvent } from '@dev-amirzubair/react-native-voice';
 import { useAvatarContext } from '../../lib/AvatarContext';
 import MicButton from '../../components/MicButton';
@@ -45,12 +46,13 @@ const RH_START = 195;
 const HAND_SIZE = 63;
 const WORD_FRAME_SIZE = POSE_SIZE + HAND_SIZE + HAND_SIZE;
 const INITIAL_WORD_SEQUENCE_LENGTH = 30;
+
 const WORD_HAND_MOTION_THRESHOLD = 0.006;
 const WORD_GESTURE_PRE_ROLL_FRAMES = 3;
 const WORD_RESULT_VISIBLE_MS = 2500;
 const WORD_DEBUG_LOG_INTERVAL = 15;
-
-const DETECTION_COOLDOWN_MS = 500;
+const DETECTION_COOLDOWN_MS = 1000;
+const NO_HANDS_GRACE_FRAMES = 4;
 
 const normalizeSpeechText = (text: string): string => {
     let s = text.trim().replace(/\s+/g, ' ').toUpperCase();
@@ -65,20 +67,205 @@ const normalizeSpeechText = (text: string): string => {
     if (s === 'WALANG ANUMAN') s = 'WALANG ANUMAN';
     if (s === 'KITA TAYO BUKAS' || s === 'KITA BUKAS') s = 'KITA TAYO BUKAS';
     if (s === 'IKINAGAGALAK KITANG MAKILALA' || s === 'NICE TO MEET') s = 'NICE TO MEET YOU';
+
+    // School settings & course questions:
+    if (s.includes('COURSE') || s.includes('KURSO')) {
+        if (s.includes('ANO') || s.includes('ANONG') || s.includes('WHAT') || s.includes('KINUHA')) {
+            s = 'ANO ANG COURSE MO';
+        }
+    } else if (s.includes('PAARALAN') || s.includes('ESKWELAHAN') || s.includes('NAG-AARAL') || s.includes('NAGAARAL') || s.includes('SCHOOL')) {
+        if (s.includes('SAAN') || s.includes('WHERE')) {
+            s = 'SAAN KA NAG-AARAL';
+        }
+    } else if (s.includes('YEAR') || s.includes('TAON')) {
+        if (s.includes('ANONG') || s.includes('ANO') || s.includes('ILANG') || s.includes('WHAT')) {
+            if (s.includes('KOLEHIYO') || s.includes('ESKWELA') || s.includes('COLLEGE') || s.includes('YEAR')) {
+                s = 'ANONG YEAR MO NA';
+            }
+        }
+    } else if (s.includes('KLASE') || s.includes('PASOK') || s.includes('CLASS')) {
+        if (s.includes('MAY') || s.includes('MERON')) {
+            s = 'MAY KLASE BA NGAYON';
+        }
+    } else if (s.includes('EXAM') || s.includes('PAGSUSULIT') || s.includes('TEST')) {
+        if (s.includes('KAMUSTA') || s.includes('KUMUSTA') || s.includes('HOW')) {
+            s = 'KUMUSTA ANG EXAM';
+        }
+    }
+
     return s;
 };
 
 /**
- * Convert all-caps fingerspelled text (e.g. "JAYZEL", "BASUD") into Titlecase ("Jayzel", "Basud")
- * so mobile TTS engines (Android Google TTS) pronounce it as a natural name/word
- * instead of treating all-caps strings as acronyms and spelling them out letter by letter.
+ * Phonetic pronunciation overrides for academic course acronyms so Android TTS
+ * spells them letter-by-letter rather than mangling them as single words.
+ */
+const ACRONYM_PRONUNCIATION_MAP: Record<string, string> = {
+    'BSIT': 'B S I T',
+    'BSHM': 'B S H M',
+    'BSCS': 'B S C S',
+    'BSIS': 'B S I S',
+    'BSTM': 'B S T M',
+    'BSBA': 'B S B A',
+    'BSA': 'B S A',
+    'BSCRIM': 'B S Criminology',
+    'BSED': 'B S Education',
+    'BEED': 'B E Education',
+    'BSN': 'B S Nursing',
+    'BSCE': 'B S Civil Engineering',
+    'BSEE': 'B S Electrical Engineering',
+    'BSME': 'B S Mechanical Engineering',
+    'BSARCH': 'B S Architecture',
+    'BSPSYCH': 'B S Psychology',
+    'BSAGRI': 'B S Agriculture',
+    'IT': 'I T',
+    'CS': 'C S',
+    'HRM': 'H R M',
+    'ID': 'I D',
+    'PE': 'P E',
+    'CNSC': 'C N S C',
+    'USANT': 'U S A N T',
+    'TESDA': 'Tesda',
+};
+
+/**
+ * English to Tagalog dictionary translation map so that any fingerspelled
+ * or recognized English word is converted into Tagalog before speech synthesis.
+ */
+const ENGLISH_TO_TAGALOG_MAP: Record<string, string> = {
+    'HELLO': 'Hello',
+    'HI': 'Kamusta',
+    'YES': 'Oo',
+    'NO': 'Hindi',
+    'THANK YOU': 'Salamat',
+    'THANKS': 'Salamat',
+    'GOOD MORNING': 'Magandang umaga',
+    'GOOD AFTERNOON': 'Magandang hapon',
+    'GOOD EVENING': 'Magandang gabi',
+    'GOOD NIGHT': 'Magandang gabi',
+    'GOODBYE': 'Paalam',
+    'BYE': 'Paalam',
+    'PLEASE': 'Pakiusap',
+    'SORRY': 'Paumanhin',
+    'WELCOME': 'Walang anuman',
+    "YOU'RE WELCOME": 'Walang anuman',
+    'YOURE WELCOME': 'Walang anuman',
+    'HOW ARE YOU': 'Kamusta ka',
+    'I AM FINE': 'Mabuti naman ako',
+    'IM FINE': 'Mabuti naman ako',
+    'FINE': 'Mabuti',
+    'UNDERSTAND': 'Naintindihan',
+    "DON'T UNDERSTAND": 'Hindi ko maintindihan',
+    'DONT UNDERSTAND': 'Hindi ko maintindihan',
+    'KNOW': 'Alam',
+    "DON'T KNOW": 'Hindi ko alam',
+    'DONT KNOW': 'Hindi ko alam',
+    'HELP': 'Tulong',
+    'WHERE': 'Saan',
+    'WHEN': 'Kailan',
+    'WHAT': 'Ano',
+    'WHY': 'Bakit',
+    'HOW': 'Paano',
+    'WHO': 'Sino',
+    'WATER': 'Tubig',
+    'FOOD': 'Pagkain',
+    'RICE': 'Kanin',
+    'BREAD': 'Tinapay',
+    'FISH': 'Isda',
+    'MEAT': 'Karne',
+    'CHICKEN': 'Manok',
+    'EGG': 'Itlog',
+    'MILK': 'Gatas',
+    'COFFEE': 'Kape',
+    'TEA': 'Tsaa',
+    'ONE': 'Isa',
+    'TWO': 'Dalawa',
+    'THREE': 'Tatlo',
+    'FOUR': 'Apat',
+    'FIVE': 'Lima',
+    'SIX': 'Anim',
+    'SEVEN': 'Pito',
+    'EIGHT': 'Walo',
+    'NINE': 'Siyam',
+    'TEN': 'Sampu',
+    'TODAY': 'Ngayong araw',
+    'TOMORROW': 'Bukas',
+    'YESTERDAY': 'Kahapon',
+    'FATHER': 'Ama',
+    'MOTHER': 'Ina',
+    'BOY': 'Lalaki',
+    'MAN': 'Lalaki',
+    'GIRL': 'Babae',
+    'WOMAN': 'Babae',
+    'CHILD': 'Bata',
+    'BABY': 'Sanggol',
+    'FRIEND': 'Kaibigan',
+    'LOVE': 'Mahal',
+    'HAPPY': 'Masaya',
+    'SAD': 'Malungkot',
+    'TIRED': 'Pagod',
+    'SICK': 'May sakit',
+    'HUNGRY': 'Gutom',
+    'THIRSTY': 'Uhaw',
+    'FAST': 'Mabilis',
+    'SLOW': 'Mabagal',
+    'BIG': 'Malaki',
+    'SMALL': 'Maliit',
+    'HOT': 'Mainit',
+    'COLD': 'Malamig',
+    // School settings additions:
+    'COURSE': 'Kurso',
+    'WHAT IS YOUR COURSE': 'Ano ang course mo',
+    'SCHOOL': 'Paaralan',
+    'COLLEGE': 'Kolehiyo',
+    'UNIVERSITY': 'Unibersidad',
+    'STUDENT': 'Estudyante',
+    'TEACHER': 'Guro',
+    'PROFESSOR': 'Propesor',
+    'CLASS': 'Klase',
+    'LESSON': 'Leksiyon',
+    'EXAM': 'Pagsusulit',
+    'TEST': 'Pagsusulit',
+    'GRADE': 'Grado',
+    'CLASSROOM': 'Silid-aralan',
+    'LIBRARY': 'Aklatan',
+    'CANTEEN': 'Kantina',
+    'UNIFORM': 'Uniporme',
+    'BOOK': 'Libro',
+    'PAPER': 'Papel',
+    'HOMEWORK': 'Takdang-aralin',
+    'PROJECT': 'Proyekto',
+};
+
+/**
+ * Convert text into natural Filipino/Tagalog for speech synthesis:
+ * 1. Checks if the word is an acronym with special letter pronunciation (e.g. BSIT -> B S I T)
+ * 2. Checks if the phrase has a direct Tagalog translation in ENGLISH_TO_TAGALOG_MAP
+ * 3. Translates individual words into Tagalog if needed
+ * 4. Formats all-caps text into Titlecase so Android TTS speaks it as a coherent Tagalog word
  */
 const toPronounceableWord = (text: string): string => {
     const trimmed = text.trim();
     if (!trimmed) return '';
+
+    const upperPhrase = trimmed.toUpperCase();
+    if (ACRONYM_PRONUNCIATION_MAP[upperPhrase]) {
+        return ACRONYM_PRONUNCIATION_MAP[upperPhrase];
+    }
+    if (ENGLISH_TO_TAGALOG_MAP[upperPhrase]) {
+        return ENGLISH_TO_TAGALOG_MAP[upperPhrase];
+    }
+
     return trimmed
         .split(/\s+/)
         .map(word => {
+            const upperWord = word.toUpperCase();
+            if (ACRONYM_PRONUNCIATION_MAP[upperWord]) {
+                return ACRONYM_PRONUNCIATION_MAP[upperWord];
+            }
+            if (ENGLISH_TO_TAGALOG_MAP[upperWord]) {
+                return ENGLISH_TO_TAGALOG_MAP[upperWord];
+            }
             if (word.length <= 1) return word;
             if (word === word.toUpperCase()) {
                 return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
@@ -87,7 +274,6 @@ const toPronounceableWord = (text: string): string => {
         })
         .join(' ');
 };
-const NO_HANDS_GRACE_FRAMES = 3;
 const SWAP_HANDS_FOR_MIRROR = false;
 
 function normalizeLabelKey(value: string): string {
@@ -200,6 +386,16 @@ function resampleCompletedGesture(frames: Float32Array[], targetLength: number):
     });
 }
 
+function swapHandsInFrames(frames: Float32Array[]): Float32Array[] {
+    return frames.map(frame => {
+        const swapped = new Float32Array(WORD_FRAME_SIZE);
+        swapped.set(frame.subarray(0, 132), 0); // pose (0..131)
+        swapped.set(frame.subarray(195, 258), 132); // RH -> LH (132..194)
+        swapped.set(frame.subarray(132, 195), 195); // LH -> RH (195..257)
+        return swapped;
+    });
+}
+
 export default function MainScreen() {
     const PAUSE_SILENCE_MS = 1200;
     const router = useRouter();
@@ -207,7 +403,8 @@ export default function MainScreen() {
     const [isAutoListening, setIsAutoListening] = useState(false);
     const [recognizedText, setRecognizedText] = useState('');
     const {
-        setSignToPlay, setLetterToPlay, sequenceToPlay, setSequenceToPlay
+        setSignToPlay, setLetterToPlay, sequenceToPlay, setSequenceToPlay,
+        setSpokenText, registerClearHandler
     } = useAvatarContext();
     const [voiceErrorMessage, setVoiceErrorMessage] = useState<string | null>(null);
     const voiceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -272,6 +469,7 @@ export default function MainScreen() {
         if (!text) return;
 
         setRecognizedText(text);
+        setSpokenText(text);
 
         const sequence = tokenizeSentence(text);
         if (sequence.length > 0) {
@@ -321,6 +519,7 @@ export default function MainScreen() {
         try {
             latestSpeechRef.current = '';
             setRecognizedText('');
+            setSpokenText('');
             speechSessionFinalizedRef.current = false;
 
             isStoppingVoiceRef.current = true;
@@ -357,6 +556,39 @@ export default function MainScreen() {
         }
     }, [finalizeSpeechSession]);
 
+    const handleClear3DSigning = useCallback(async () => {
+        clearPauseTimer();
+        clearAutoRestartTimer();
+        latestSpeechRef.current = '';
+        lastQueuedSpeechRef.current = '';
+        speechSessionFinalizedRef.current = false;
+
+        if (Voice && (isListening || isVoiceStartingRef.current)) {
+            try {
+                isStoppingVoiceRef.current = true;
+                await Voice.stop().catch(() => {});
+                await Voice.cancel().catch(() => {});
+            } catch (err) {
+                console.warn('[Voice] Clear stop error:', err);
+            } finally {
+                isStoppingVoiceRef.current = false;
+                setIsListening(false);
+            }
+        }
+
+        setRecognizedText('');
+        setSpokenText('');
+        setSequenceToPlay(null);
+        setSignToPlay(null);
+        setLetterToPlay(null);
+        setVoiceErrorMessage(null);
+        stopDetectedSpeech();
+    }, [clearPauseTimer, clearAutoRestartTimer, isListening, setSequenceToPlay, setSignToPlay, setLetterToPlay, setSpokenText, stopDetectedSpeech]);
+
+    useEffect(() => {
+        registerClearHandler(handleClear3DSigning);
+    }, [registerClearHandler, handleClear3DSigning]);
+
     const scheduleAutoRestart = useCallback((delayMs = 400) => {
         clearAutoRestartTimer();
         if (!isAutoListening || isVoiceStartingRef.current) return;
@@ -377,9 +609,10 @@ export default function MainScreen() {
 
         latestSpeechRef.current = text;
         setRecognizedText(text);
+        setSpokenText(text);
         speechSessionFinalizedRef.current = false;
         resetPauseTimer();
-    }, [resetPauseTimer]);
+    }, [resetPauseTimer, setSpokenText]);
 
     const onSpeechResults = useCallback((e: SpeechResultsEvent) => {
         if (isTtsSpeakingRef.current) return;
@@ -473,9 +706,12 @@ export default function MainScreen() {
     const wordFrameBufferRef = useRef<Float32Array[]>([]);
     const previousWordFrameRef = useRef<Float32Array | null>(null);
     const wordGestureMotionSeenRef = useRef(false);
+    const wordHandsSeenCountRef = useRef(0);
     const wordStillFrameCountRef = useRef(0);
+    const wordCumulativeMotionRef = useRef(0);
     const wordAttemptIdRef = useRef(0);
     const missingHandFrameCountRef = useRef(0);
+    const wordGestureMissingGraceRef = useRef(0);
     const lastDetectionRef = useRef<number>(0);
     const resultHideTimeoutRef = useRef<NodeJS.Timeout | null>(null);
     const isWordProcessingRef = useRef<boolean>(false);
@@ -503,7 +739,10 @@ export default function MainScreen() {
         wordFrameBufferRef.current = [];
         previousWordFrameRef.current = null;
         wordGestureMotionSeenRef.current = false;
+        wordHandsSeenCountRef.current = 0;
         wordStillFrameCountRef.current = 0;
+        wordCumulativeMotionRef.current = 0;
+        wordGestureMissingGraceRef.current = 0;
         isWordProcessingRef.current = false;
     }, []);
 
@@ -523,7 +762,10 @@ export default function MainScreen() {
         wordFrameBufferRef.current = [];
         previousWordFrameRef.current = null;
         wordGestureMotionSeenRef.current = false;
+        wordHandsSeenCountRef.current = 0;
         wordStillFrameCountRef.current = 0;
+        wordCumulativeMotionRef.current = 0;
+        wordGestureMissingGraceRef.current = 0;
     }, []);
 
     const switchRecognitionMode = useCallback((mode: RecognitionMode) => {
@@ -793,7 +1035,44 @@ const handleSpeakWord = useCallback(() => {
         speakAndLogSign(text, pronounceable);
         setStatus(`Binasa: ${pronounceable}`);
     }
-    }, [speakAndLogSign]);
+}, [speakAndLogSign]);
+
+const currentPrefix = useMemo(() => {
+    if (!spelledText) return '';
+    const parts = spelledText.split(/\s+/);
+    return parts[parts.length - 1] || '';
+}, [spelledText]);
+
+const wordSuggestions = useMemo(() => {
+    if (activeMode !== 'alphabet') {
+        return [];
+    }
+    if (!currentPrefix && !recognizedText) {
+        return [];
+    }
+    return getWordSuggestions(currentPrefix, recognizedText, 8);
+}, [activeMode, currentPrefix, recognizedText]);
+
+const handleSelectSuggestion = useCallback((chosenWord: string) => {
+    if (wordCompletionTimerRef.current) {
+        clearTimeout(wordCompletionTimerRef.current);
+        wordCompletionTimerRef.current = null;
+    }
+
+    const currentText = spelledTextRef.current;
+    const lastSpaceIndex = currentText.lastIndexOf(' ');
+    const base = lastSpaceIndex >= 0 ? currentText.slice(0, lastSpaceIndex + 1) : '';
+    const newText = base + chosenWord + ' ';
+
+    spelledTextRef.current = newText;
+    setSpelledText(newText);
+    lastSpokenWordRef.current = chosenWord;
+
+    const pronounceable = toPronounceableWord(chosenWord);
+    speakAndLogSign(chosenWord, pronounceable);
+    setStatus(`Pinili: ${pronounceable}`);
+    setDebugInfo(`Suggestion: "${pronounceable}"`);
+}, [speakAndLogSign]);
 
 const handleHandLandmarksExtracted = useCallback(async (landmarks: Float32Array, timestamp: number) => {
     if (!canDetect || activeMode !== 'alphabet') return;
@@ -921,12 +1200,13 @@ const processWordKeypoints = useCallback(async (keypoints: Float32Array, handsDe
 const handleHandsMissing = useCallback(() => {
     missingHandFrameCountRef.current += 1;
     if (missingHandFrameCountRef.current < NO_HANDS_GRACE_FRAMES) return;
-    if (missingHandFrameCountRef.current > NO_HANDS_GRACE_FRAMES) return;
 
-    setStatus('Walang kamay na nakita.');
     if (activeMode === 'word') {
-        resetWordPredictionState();
-        setShowResult(false);
+        if (!wordGestureMotionSeenRef.current) {
+            resetWordPredictionState();
+            setShowResult(false);
+            setStatus('Walang kamay na nakita.');
+        }
         return;
     }
 
@@ -939,6 +1219,9 @@ const handleKeypointsExtracted = useCallback(async (
     if (!canDetect || activeMode !== 'word') return;
     if (keypoints === 'no-hands') {
         handleHandsMissing();
+        if (previousWordFrameRef.current) {
+            await processWordKeypoints(previousWordFrameRef.current, false);
+        }
         return;
     }
 
@@ -952,9 +1235,7 @@ const handleKeypointsExtracted = useCallback(async (
 
     if (!handsDetected) {
         handleHandsMissing();
-        if (missingHandFrameCountRef.current < NO_HANDS_GRACE_FRAMES) {
-            await processWordKeypoints(keypoints, false);
-        }
+        await processWordKeypoints(keypoints, false);
         return;
     }
 
@@ -1000,6 +1281,10 @@ const handleCameraIssue = useCallback((message: string) => {
     setDebugInfo(`Camera: ${message}`);
 }, [isCameraReady]);
 
+    const hasActive3DSigning = Boolean(
+        (sequenceToPlay && sequenceToPlay.length > 0) || recognizedText
+    );
+
 return (
     <View style={styles.container}>
         <View style={styles.topHalf}>
@@ -1010,49 +1295,49 @@ return (
                         <Text style={styles.errorText}>{voiceErrorMessage}</Text>
                     </View>
                 ) : null}
+            </View>
 
-                {sequenceToPlay && sequenceToPlay.length > 0 && (
-                    <View style={styles.sequenceContainer}>
-                        {sequenceToPlay.slice(0, 5).map((item, index) => (
-                            <View key={index} style={styles.sequenceBadge}>
-                                <Text style={styles.sequenceText}>
-                                    {item.display}
-                                </Text>
-                            </View>
-                        ))}
-                        {sequenceToPlay.length > 5 && (
-                            <Text style={styles.moreText}>+{sequenceToPlay.length - 5} more</Text>
-                        )}
-                    </View>
+            {/* Side Action Buttons inside 3D View */}
+            <View style={styles.sideButtonsContainer}>
+                {hasActive3DSigning && (
+                    <TouchableOpacity
+                        style={styles.sideStopButton}
+                        onPress={handleClear3DSigning}
+                        activeOpacity={0.8}
+                        accessibilityLabel="Stop 3D signing"
+                    >
+                        <MaterialIcons name="stop" size={24} color="#FFFFFF" />
+                    </TouchableOpacity>
                 )}
-            </View>
 
-            {/* Small Side Mic Trigger Button inside 3D View */}
-            <TouchableOpacity
-                style={[
-                    styles.sideMicButton,
-                    isListening && styles.sideMicButtonActive
-                ]}
-                onPress={toggleListening}
-                activeOpacity={0.8}
-            >
-                <MaterialIcons
-                    name={isListening ? 'mic' : 'mic-none'}
-                    size={24}
-                    color={isListening ? '#FFFFFF' : '#7E57C2'}
-                />
-            </TouchableOpacity>
-
-            <View style={styles.micContainer}>
-                <MicButton
+                <TouchableOpacity
+                    style={[
+                        styles.sideMicButton,
+                        isListening && styles.sideMicButtonActive
+                    ]}
                     onPress={toggleListening}
-                    isListening={isListening}
-                    size={100}
-                />
-                <Text style={styles.micHint}>
-                    {isListening ? 'LISTENING... TAP TO TRANSLATE' : 'TAP MIC TO SPEAK'}
-                </Text>
+                    activeOpacity={0.8}
+                >
+                    <MaterialIcons
+                        name={isListening ? 'mic' : 'mic-none'}
+                        size={24}
+                        color={isListening ? '#FFFFFF' : '#7E57C2'}
+                    />
+                </TouchableOpacity>
             </View>
+
+            {!hasActive3DSigning && (
+                <View style={styles.micContainer}>
+                    <MicButton
+                        onPress={toggleListening}
+                        isListening={isListening}
+                        size={92}
+                    />
+                    <Text style={styles.micHint}>
+                        {isListening ? 'LISTENING... TAP TO TRANSLATE' : 'TAP MIC TO SPEAK'}
+                    </Text>
+                </View>
+            )}
         </View>
 
         <View style={styles.bottomHalf}>
@@ -1105,6 +1390,29 @@ return (
             )}
 
             <ResultOverlay label={detectedLabel} confidence={confidence} visible={showResult} />
+
+            {activeMode === 'alphabet' && wordSuggestions.length > 0 && (
+                <View style={styles.suggestionsContainer}>
+                    <ScrollView
+                        horizontal
+                        showsHorizontalScrollIndicator={false}
+                        contentContainerStyle={styles.suggestionsScrollContent}
+                        keyboardShouldPersistTaps="handled"
+                    >
+                        {wordSuggestions.map((word) => (
+                            <TouchableOpacity
+                                key={word}
+                                style={styles.suggestionChip}
+                                onPress={() => handleSelectSuggestion(word)}
+                                activeOpacity={0.7}
+                            >
+                                <MaterialIcons name="auto-fix-high" size={13} color="#2B9C8E" style={{ marginRight: 4 }} />
+                                <Text style={styles.suggestionText}>{word}</Text>
+                            </TouchableOpacity>
+                        ))}
+                    </ScrollView>
+                </View>
+            )}
 
             {activeMode === 'alphabet' && (
                 <View style={styles.spellingBar}>
@@ -1187,21 +1495,158 @@ return (
 
 const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: '#FFF9F5' },
-    textContainer: { position: 'absolute', top: 12, left: 0, right: 0, alignItems: 'center', zIndex: 105, width: '100%' },
-    errorCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF0F0', borderWidth: 1.5, borderColor: '#FFCCCC', borderRadius: 14, paddingHorizontal: 16, paddingVertical: 10, width: '85%', justifyContent: 'center', marginTop: 8 },
+    textContainer: {
+        position: 'absolute',
+        top: Platform.OS === 'android' ? (StatusBar.currentHeight ?? 24) + 6 : 40,
+        left: 14,
+        right: 14,
+        alignItems: 'center',
+        zIndex: 200,
+    },
+    errorCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF0F0', borderWidth: 1.5, borderColor: '#FFCCCC', borderRadius: 14, paddingHorizontal: 16, paddingVertical: 10, width: '90%', justifyContent: 'center', marginTop: 8 },
     errorText: { color: '#E57373', fontSize: 13, fontWeight: '600', textAlign: 'center' },
     micContainer: { position: 'absolute', bottom: 36, left: 0, right: 0, alignItems: 'center', zIndex: 105 },
     micHint: { color: '#B0B0C8', fontSize: 11, fontWeight: 'bold', letterSpacing: 1.5, marginTop: 16 },
-    sequenceContainer: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', marginTop: 12, gap: 8 },
-    sequenceBadge: { backgroundColor: '#F0EDFB', paddingHorizontal: 14, paddingVertical: 7, borderRadius: 14, borderWidth: 1.5, borderColor: '#C9B8F0', shadowColor: '#9575CD', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.08, shadowRadius: 4, elevation: 2 },
-    sequenceText: { color: '#5E35B1', fontSize: 11, fontWeight: '900', letterSpacing: 0.4 },
+    bottomWordCardContainer: {
+        position: 'absolute',
+        bottom: 12,
+        left: 14,
+        right: 14,
+        alignItems: 'center',
+        zIndex: 250,
+    },
+    speechOverlayCard: {
+        width: '100%',
+        backgroundColor: '#FFFFFF',
+        borderRadius: 20,
+        borderWidth: 2,
+        borderColor: '#9575CD',
+        paddingHorizontal: 16,
+        paddingVertical: 12,
+        shadowColor: '#512DA8',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.22,
+        shadowRadius: 10,
+        elevation: 12,
+    },
+    speechMainRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        width: '100%',
+    },
+    voiceIconBubble: {
+        width: 38,
+        height: 38,
+        borderRadius: 19,
+        backgroundColor: '#7E57C2',
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginRight: 12,
+        shadowColor: '#7E57C2',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.25,
+        shadowRadius: 4,
+        elevation: 3,
+    },
+    speechTextContainer: {
+        flex: 1,
+        justifyContent: 'center',
+        marginRight: 10,
+    },
+    speechLabelHeading: {
+        color: '#7E57C2',
+        fontSize: 10,
+        fontWeight: '900',
+        letterSpacing: 1.2,
+        textTransform: 'uppercase',
+        marginBottom: 2,
+    },
+    speechRecognizedWord: {
+        color: '#1A0938',
+        fontSize: 22,
+        fontWeight: 'bold',
+        letterSpacing: 0.4,
+    },
+    clearSpeechButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#FFEBEE',
+        borderWidth: 1.5,
+        borderColor: '#FFCDD2',
+        borderRadius: 14,
+        paddingHorizontal: 12,
+        paddingVertical: 8,
+        shadowColor: '#D32F2F',
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.15,
+        shadowRadius: 3,
+        elevation: 2,
+    },
+    clearSpeechButtonText: {
+        color: '#D32F2F',
+        fontSize: 13,
+        fontWeight: 'bold',
+        marginLeft: 3,
+    },
+    sequenceBadgesRow: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        alignItems: 'center',
+        marginTop: 10,
+        paddingTop: 8,
+        borderTopWidth: 1,
+        borderTopColor: '#EDE7F6',
+        gap: 6,
+    },
+    sequenceRowLabel: {
+        color: '#9575CD',
+        fontSize: 11,
+        fontWeight: '800',
+        textTransform: 'uppercase',
+        marginRight: 4,
+    },
+    sequenceBadge: {
+        backgroundColor: '#F3E5F5',
+        paddingHorizontal: 12,
+        paddingVertical: 5,
+        borderRadius: 12,
+        borderWidth: 1.5,
+        borderColor: '#CE93D8',
+    },
+    sequenceText: {
+        color: '#4A148C',
+        fontSize: 12,
+        fontWeight: '900',
+        letterSpacing: 0.4,
+    },
     moreText: { color: '#B0B0C8', fontSize: 11, fontWeight: '600', alignSelf: 'center', marginLeft: 4 },
     topHalf: { height: '50%', width: '100%', position: 'relative' },
-    sideMicButton: {
+    sideButtonsContainer: {
         position: 'absolute',
         top: '50%',
-        marginTop: -24,
         right: 16,
+        transform: [{ translateY: -44 }],
+        alignItems: 'center',
+        gap: 10,
+        zIndex: 120,
+    },
+    sideStopButton: {
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: '#FF5252',
+        width: 44,
+        height: 44,
+        borderRadius: 22,
+        borderWidth: 1.5,
+        borderColor: '#FFCDD2',
+        shadowColor: '#FF5252',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.3,
+        shadowRadius: 6,
+        elevation: 5,
+    },
+    sideMicButton: {
         alignItems: 'center',
         justifyContent: 'center',
         backgroundColor: '#FFFFFF',
@@ -1215,7 +1660,6 @@ const styles = StyleSheet.create({
         shadowOpacity: 0.15,
         shadowRadius: 6,
         elevation: 4,
-        zIndex: 120,
     },
     sideMicButtonActive: {
         backgroundColor: '#7E57C2',
@@ -1356,6 +1800,41 @@ const styles = StyleSheet.create({
     mirrorText: { color: '#2B9C8E', marginLeft: 6, fontSize: 11, fontWeight: 'bold', letterSpacing: 0.4 },
     dotPattern: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, pointerEvents: 'none' },
     dot: { position: 'absolute', width: 3, height: 3, borderRadius: 1.5, backgroundColor: 'rgba(91, 196, 181, 0.15)' },
+    suggestionsContainer: {
+        position: 'absolute',
+        bottom: 130,
+        left: 16,
+        right: 16,
+        zIndex: 115,
+    },
+    suggestionsScrollContent: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        paddingHorizontal: 2,
+        paddingVertical: 4,
+    },
+    suggestionChip: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#FFFFFF',
+        borderRadius: 16,
+        borderWidth: 1.5,
+        borderColor: '#A8E6CF',
+        paddingHorizontal: 12,
+        paddingVertical: 6,
+        shadowColor: '#5BC4B5',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.15,
+        shadowRadius: 4,
+        elevation: 3,
+    },
+    suggestionText: {
+        color: '#2B9C8E',
+        fontSize: 12,
+        fontWeight: 'bold',
+        letterSpacing: 0.6,
+    },
     spellingBar: {
         position: 'absolute',
         bottom: 76,

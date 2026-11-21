@@ -51,6 +51,7 @@ const MEDIAPIPE_SCRIPT = `
         let latestPoseResults = null;
         let latestHandsResults = null;
         let wordProcessedFrameCount = 0;
+        let alphabetProcessedFrameCount = 0;
         let wordKeypointBatch = [];
         let wordInputCanvas = null;
         let wordInputCtx = null;
@@ -73,6 +74,7 @@ const MEDIAPIPE_SCRIPT = `
                 wordKeypointBatch = [];
                 latestPoseResults = null;
                 wordProcessedFrameCount = 0;
+                alphabetProcessedFrameCount = 0;
                 performanceWindowStartedAt = performance.now();
                 performanceFrameCount = 0;
                 performanceTotalProcessingMs = 0;
@@ -240,9 +242,73 @@ const MEDIAPIPE_SCRIPT = `
             latestPoseResults = results;
         }
 
+        function isFalseFaceHand(handLandmarks, poseLandmarks) {
+            if (!handLandmarks || handLandmarks.length < 21) return false;
+            if (!poseLandmarks || poseLandmarks.length < 17) return false;
+
+            const nose = poseLandmarks[0];
+            const leftShoulder = poseLandmarks[11];
+            const rightShoulder = poseLandmarks[12];
+            const leftWrist = poseLandmarks[15];
+            const rightWrist = poseLandmarks[16];
+
+            if (!nose || !leftShoulder || !rightShoulder) return false;
+            if (nose.visibility !== undefined && nose.visibility < 0.35) return false;
+
+            const handWrist = handLandmarks[0];
+            if (!handWrist) return false;
+
+            // Compute head/face boundary zone based on nose & shoulders
+            const shoulderY = (leftShoulder.y + rightShoulder.y) / 2;
+            const shoulderSpan = Math.hypot(leftShoulder.x - rightShoulder.x, leftShoulder.y - rightShoulder.y);
+            const faceRadius = Math.max(shoulderSpan * 0.45, 0.15);
+
+            const distToNose = Math.hypot(handWrist.x - nose.x, handWrist.y - nose.y);
+            const isInFaceZone = distToNose < faceRadius || (handWrist.y < shoulderY && Math.abs(handWrist.x - nose.x) < faceRadius * 0.85);
+
+            if (!isInFaceZone) {
+                // Hand wrist is outside face/head area - genuine hand
+                return false;
+            }
+
+            // Hand wrist IS within the face/head zone.
+            // A genuine hand on the face requires an arm physically raised to the face.
+            // Check if either pose wrist is near the hand wrist OR elevated near shoulder level.
+            let armRaisedToHand = false;
+
+            if (leftWrist && (leftWrist.visibility === undefined || leftWrist.visibility > 0.25)) {
+                const distToLeft = Math.hypot(handWrist.x - leftWrist.x, handWrist.y - leftWrist.y);
+                if (distToLeft < 0.22 || leftWrist.y < shoulderY + 0.08) {
+                    armRaisedToHand = true;
+                }
+            }
+
+            if (rightWrist && (rightWrist.visibility === undefined || rightWrist.visibility > 0.25)) {
+                const distToRight = Math.hypot(handWrist.x - rightWrist.x, handWrist.y - rightWrist.y);
+                if (distToRight < 0.22 || rightWrist.y < shoulderY + 0.08) {
+                    armRaisedToHand = true;
+                }
+            }
+
+            // If hand wrist is positioned on the face, but neither arm wrist is raised,
+            // this is a phantom hand hallucinated by MediaPipe on facial contours.
+            return !armRaisedToHand;
+        }
+
         function emitCombinedResults(poseLandmarks = []) {
-            const handLandmarks = latestHandsResults?.multiHandLandmarks || [];
-            const handedness = latestHandsResults?.multiHandedness || [];
+            const rawHandLandmarks = latestHandsResults?.multiHandLandmarks || [];
+            const rawHandedness = latestHandsResults?.multiHandedness || [];
+            
+            // Filter out phantom hand landmarks appearing over face when hands are down
+            const handLandmarks = [];
+            const handedness = [];
+            for (let i = 0; i < rawHandLandmarks.length; i++) {
+                if (!isFalseFaceHand(rawHandLandmarks[i], poseLandmarks)) {
+                    handLandmarks.push(rawHandLandmarks[i]);
+                    handedness.push(rawHandedness[i]);
+                }
+            }
+
             let leftHandLandmarks = [];
             let rightHandLandmarks = [];
 
@@ -284,7 +350,8 @@ const MEDIAPIPE_SCRIPT = `
                 wordInputCanvas.width = WORD_INPUT_WIDTH;
                 wordInputCanvas.height = WORD_INPUT_HEIGHT;
                 wordInputCtx = wordInputCanvas.getContext('2d', { alpha: false });
-                wordInputCtx.imageSmoothingEnabled = false;
+                wordInputCtx.imageSmoothingEnabled = true;
+                wordInputCtx.imageSmoothingQuality = 'medium';
 
                 poseTracker = new Pose({ locateFile: (file) => 'https://cdn.jsdelivr.net/npm/@mediapipe/pose/' + file });
                 poseTracker.setOptions({
@@ -302,8 +369,8 @@ const MEDIAPIPE_SCRIPT = `
                 handsTracker.setOptions({
                     maxNumHands: 2,
                     modelComplexity: 0,
-                    minDetectionConfidence: 0.5,
-                    minTrackingConfidence: 0.5
+                    minDetectionConfidence: 0.72,
+                    minTrackingConfidence: 0.65
                 });
                 handsTracker.onResults(onHandsResults);
 
@@ -356,9 +423,12 @@ const MEDIAPIPE_SCRIPT = `
                                 await handsTracker.send({ image: wordInputCanvas });
                                 emitCombinedResults(latestPoseResults?.poseLandmarks || []);
                             } else {
-                                // Alphabet remains on its existing fast hand-only path.
+                                alphabetProcessedFrameCount += 1;
+                                if (!latestPoseResults || alphabetProcessedFrameCount % 15 === 1) {
+                                    await poseTracker.send({ image: videoElement });
+                                }
                                 await handsTracker.send({ image: videoElement });
-                                emitCombinedResults();
+                                emitCombinedResults(latestPoseResults?.poseLandmarks || []);
                             }
                             processedFrame = true;
                         }

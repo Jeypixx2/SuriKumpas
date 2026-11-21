@@ -126,11 +126,11 @@ const styles = StyleSheet.create({
         marginBottom: 8,
     },
     filipino: {
-        color: '#2D3561',
-        fontSize: 22,
+        color: '#1A0938',
+        fontSize: 28,
         fontWeight: 'bold',
         textAlign: 'center',
-        marginBottom: 20,
+        marginBottom: 16,
     },
     confidenceContainer: {
         width: '100%',

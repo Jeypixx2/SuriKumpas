@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Tabs, useSegments } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { View, Text, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { AvatarProvider, useAvatarContext } from '../../lib/AvatarContext';
 import AvatarViewer from '../../components/AvatarViewer';
 import { globalAlphabetClassifier } from '../../lib/AlphabetClassifier';
@@ -106,7 +106,9 @@ function GlobalAvatar() {
     letterToPlay, setLetterToPlay,
     sequenceToPlay, setSequenceToPlay,
     isAvatarLoaded, setIsAvatarLoaded,
-    avatarLoadError, setAvatarLoadError
+    avatarLoadError, setAvatarLoadError,
+    spokenText, setSpokenText,
+    clearAvatarSigning
   } = useAvatarContext();
 
   const dots = useMemo(() => {
@@ -125,10 +127,11 @@ function GlobalAvatar() {
   }, []);
 
   const shouldShowAvatar = true;
+  const hasActiveSpeech = Boolean(spokenText || (sequenceToPlay && sequenceToPlay.length > 0));
 
   return (
     <View
-      pointerEvents="none"
+      pointerEvents="box-none"
       style={[
       styles.avatarContainer,
       {
@@ -137,6 +140,7 @@ function GlobalAvatar() {
     ]}>
       <AvatarViewer
         style={styles.avatar}
+        pointerEvents="none"
         signToPlay={signToPlay}
         letterToPlay={letterToPlay}
         sequenceToPlay={sequenceToPlay}
@@ -153,6 +157,7 @@ function GlobalAvatar() {
           setSequenceToPlay(null);
           setSignToPlay(null);
           setLetterToPlay(null);
+          setSpokenText('');
         }}
       />
 
@@ -165,6 +170,59 @@ function GlobalAvatar() {
           <Text style={[styles.loadingText, avatarLoadError && styles.loadingErrorText]}>
             {avatarLoadError ? 'Avatar could not load' : 'Preparing avatar...'}
           </Text>
+        </View>
+      )}
+
+      {/* Recognized Word Card: Rendered directly on top of AvatarViewer so the 3D model is BEHIND it! */}
+      {hasActiveSpeech && (
+        <View style={styles.bottomWordCardContainer} pointerEvents="box-none">
+          <View style={styles.speechOverlayCard}>
+            <View style={styles.speechMainRow}>
+              <View style={styles.voiceIconBubble}>
+                <Ionicons name="mic" size={18} color="#FFFFFF" />
+              </View>
+
+              <View style={styles.speechTextContainer}>
+                <Text style={styles.speechLabelHeading}>SINALITA</Text>
+                <Text
+                  style={[
+                    styles.speechRecognizedWord,
+                    ((spokenText || '').length > 14) && styles.speechRecognizedWordLong
+                  ]}
+                  numberOfLines={2}
+                  ellipsizeMode="tail"
+                >
+                  {spokenText ? spokenText.toUpperCase() : (sequenceToPlay?.[0]?.display ?? '')}
+                </Text>
+              </View>
+
+              <TouchableOpacity
+                style={styles.clearSpeechButton}
+                onPress={clearAvatarSigning}
+                activeOpacity={0.7}
+                accessibilityLabel="Clear speech and stop 3D signing"
+              >
+                <Ionicons name="close" size={16} color="#D32F2F" />
+                <Text style={styles.clearSpeechButtonText}>Clear</Text>
+              </TouchableOpacity>
+            </View>
+
+            {sequenceToPlay && sequenceToPlay.length > 0 && (
+              <View style={styles.sequenceBadgesRow}>
+                <Text style={styles.sequenceRowLabel}>Senyas:</Text>
+                {sequenceToPlay.slice(0, 5).map((item, index) => (
+                  <View key={index} style={styles.sequenceBadge}>
+                    <Text style={styles.sequenceText}>
+                      {item.display}
+                    </Text>
+                  </View>
+                ))}
+                {sequenceToPlay.length > 5 && (
+                  <Text style={styles.moreText}>+{sequenceToPlay.length - 5}</Text>
+                )}
+              </View>
+            )}
+          </View>
         </View>
       )}
     </View>
@@ -242,5 +300,122 @@ const styles = StyleSheet.create({
         zIndex: 300,
         elevation: 300,
         backgroundColor: '#FFF9F5',
+    },
+    bottomWordCardContainer: {
+        position: 'absolute',
+        bottom: 12,
+        left: 12,
+        right: 12,
+        alignItems: 'center',
+        zIndex: 500,
+        elevation: 20,
+    },
+    speechOverlayCard: {
+        width: '100%',
+        backgroundColor: '#FFFFFF',
+        borderRadius: 18,
+        borderWidth: 1.5,
+        borderColor: '#9575CD',
+        paddingHorizontal: 14,
+        paddingVertical: 10,
+        shadowColor: '#512DA8',
+        shadowOffset: { width: 0, height: 3 },
+        shadowOpacity: 0.2,
+        shadowRadius: 8,
+        elevation: 15,
+    },
+    speechMainRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        width: '100%',
+    },
+    voiceIconBubble: {
+        width: 34,
+        height: 34,
+        borderRadius: 17,
+        backgroundColor: '#7E57C2',
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginRight: 8,
+        flexShrink: 0,
+    },
+    speechTextContainer: {
+        flex: 1,
+        justifyContent: 'center',
+        marginRight: 8,
+        flexShrink: 1,
+    },
+    speechLabelHeading: {
+        color: '#7E57C2',
+        fontSize: 10,
+        fontWeight: '900',
+        letterSpacing: 1.1,
+        textTransform: 'uppercase',
+        marginBottom: 1,
+    },
+    speechRecognizedWord: {
+        color: '#1A0938',
+        fontSize: 20,
+        fontWeight: 'bold',
+        letterSpacing: 0.3,
+    },
+    speechRecognizedWordLong: {
+        fontSize: 15,
+        lineHeight: 18,
+    },
+    clearSpeechButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#FFEBEE',
+        borderWidth: 1.2,
+        borderColor: '#FFCDD2',
+        borderRadius: 12,
+        paddingHorizontal: 10,
+        paddingVertical: 6,
+        flexShrink: 0,
+    },
+    clearSpeechButtonText: {
+        color: '#D32F2F',
+        fontSize: 12,
+        fontWeight: 'bold',
+        marginLeft: 2,
+    },
+    sequenceBadgesRow: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        alignItems: 'center',
+        marginTop: 10,
+        paddingTop: 8,
+        borderTopWidth: 1,
+        borderTopColor: '#EDE7F6',
+        gap: 6,
+    },
+    sequenceRowLabel: {
+        color: '#9575CD',
+        fontSize: 11,
+        fontWeight: '800',
+        textTransform: 'uppercase',
+        marginRight: 4,
+    },
+    sequenceBadge: {
+        backgroundColor: '#F3E5F5',
+        paddingHorizontal: 12,
+        paddingVertical: 5,
+        borderRadius: 12,
+        borderWidth: 1.5,
+        borderColor: '#CE93D8',
+    },
+    sequenceText: {
+        color: '#4A148C',
+        fontSize: 12,
+        fontWeight: '900',
+        letterSpacing: 0.4,
+    },
+    moreText: {
+        color: '#B0B0C8',
+        fontSize: 11,
+        fontWeight: '600',
+        alignSelf: 'center',
+        marginLeft: 4,
     },
 });

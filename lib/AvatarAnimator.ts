@@ -1049,11 +1049,12 @@ export class AvatarAnimator {
     }
 
     stopSignAnimation(): void {
-        debugLog('[AvatarAnimator] Resetting whole queue');
+        debugLog('[AvatarAnimator] Stopping sign animation and resetting queue');
+        this.sequenceId += 1;
         this.queue = [];
         this.isProcessingQueue = false;
         if (this.currentSignAction) {
-            this.currentSignAction.fadeOut(0.3);
+            this.currentSignAction.fadeOut(0.25);
             this.currentSignAction = null;
         }
         this.isPlayingSign = false;
@@ -1062,7 +1063,11 @@ export class AvatarAnimator {
 
         if (this.idleAction) {
             this.idleAction.reset();
+            this.idleAction.setEffectiveWeight(1.0);
+            this.idleAction.fadeIn(0.25);
             this.idleAction.play();
+        } else {
+            this.startIdleAnimation();
         }
     }
 

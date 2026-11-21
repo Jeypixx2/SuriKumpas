@@ -147,6 +147,8 @@ export const FSL_LABELS: FSLLabel[] = [
     { id: 135, english: "ANG PANGALAN KO AY", filipino: "ANG PANGALAN KO AY", category: "GREETING" },
     { id: 136, english: "ANONG PROBLEMA", filipino: "ANONG PROBLEMA", category: "SURVIVAL" },
     { id: 137, english: "SA MULING PAGKIKITA", filipino: "SA MULING PAGKIKITA", category: "GREETING" },
+    { id: 138, english: "WHEN IS YOUR BIRTHDAY", filipino: "KAILAN ANG KAARAWAN MO", category: "CONVERSATION" },
+    { id: 139, english: "KAILAN ANG KAARAWAN MO", filipino: "KAILAN ANG KAARAWAN MO", category: "CONVERSATION" },
 ];
 
 export const VISIBLE_FSL_LABELS: FSLLabel[] = FSL_LABELS;
@@ -234,6 +236,8 @@ export function tokenizeSentence(sentence: string): SequenceItem[] {
     normalized = normalized.replace(/\bMY\s+NAME\s+IS\b/g, 'MY NAME IS');
     normalized = normalized.replace(/\bSA\s+MULING\s+PAGKIKITA\b/g, 'SA MULING PAGKIKITA');
     normalized = normalized.replace(/\bUNTIL\s+WE\s+MEET\b(?!\s+AGAIN)/g, 'UNTIL WE MEET AGAIN');
+    normalized = normalized.replace(/\bANONG?\s+(COURSE|KURSO)\s+MO\b/g, 'ANO ANG COURSE MO');
+    normalized = normalized.replace(/\bSAANG?\s+(ESKWELAHAN|PAARALAN|SCHOOL)\b/g, 'SAAN KA NAG-AARAL');
 
     const sequence: SequenceItem[] = [];
     const words = normalized.split(/\s+/).filter(w => w.length > 0);

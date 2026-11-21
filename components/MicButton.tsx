@@ -97,6 +97,7 @@ export default function MicButton({ onPress, isListening = false, size = 100 }: 
             {isListening && (
                 <>
                     <Animated.View
+                        pointerEvents="none"
                         style={[
                             styles.ripple,
                             {
@@ -109,6 +110,7 @@ export default function MicButton({ onPress, isListening = false, size = 100 }: 
                         ]}
                     />
                     <Animated.View
+                        pointerEvents="none"
                         style={[
                             styles.ripple,
                             {
@@ -124,6 +126,7 @@ export default function MicButton({ onPress, isListening = false, size = 100 }: 
             )}
 
             <Animated.View
+                pointerEvents="none"
                 style={[
                     styles.buttonShadow,
                     isListening && styles.buttonShadowActive,

@@ -60,11 +60,17 @@ export class SignClassifier {
         }
 
         const destination = baseDir + this.getCachedAssetFilename(asset, filename);
-        const info = await FileSystem.getInfoAsync(destination);
-        if (info.exists && !asset.hash) {
-            await FileSystem.deleteAsync(destination, { idempotent: true });
+        let info = await FileSystem.getInfoAsync(destination);
+        if (info.exists) {
+            const cachedSize = (info as any).size;
+            const assetSize = (asset as any).fileSize || (asset as any).size;
+            if ((assetSize && cachedSize !== assetSize) || !asset.hash) {
+                console.log(`[SignClassifier] Refreshing ${filename} (cached: ${cachedSize}, asset: ${assetSize})...`);
+                await FileSystem.deleteAsync(destination, { idempotent: true });
+                info = await FileSystem.getInfoAsync(destination);
+            }
         }
-        if (!info.exists || !asset.hash) {
+        if (!info.exists) {
             await FileSystem.downloadAsync(asset.uri, destination);
         }
         return destination;
@@ -417,8 +423,8 @@ export class SignClassifier {
 
         const outputCount = this.getElementCount(outputShape);
         if (outputCount > 0 && outputCount !== this.wordLabels.length) {
-            console.warn(
-                `[SignClassifier] Word model outputs ${outputCount} classes, but ${WORD_LABEL_MAPPING_ASSET_PATH} has ${this.wordLabels.length} labels.`
+            throw new Error(
+                `[SignClassifier] Word model outputs ${outputCount} classes, but ${WORD_LABEL_MAPPING_ASSET_PATH} has ${this.wordLabels.length} labels. Mismatch detected!`
             );
         }
     }
